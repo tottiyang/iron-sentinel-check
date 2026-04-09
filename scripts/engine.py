@@ -648,15 +648,16 @@ def format_report(report: AuditReport) -> str:
     lines = []
 
     # ── 头部 ──
+    title_name = f"{report.stock_name or ''}({report.stock_code})"
+    title_sub  = "买点审核报告"
     lines.append("╔" + "═" * (W - 2) + "╗")
-    name_str = f"  {report.stock_name or ''}({report.stock_code}) 买点审核报告"
-    lines.append("║" + name_str.center(W - 2) + "║")
+    lines.append("║" + ("  ★  " + title_name + "  ★").center(W - 2) + "║")
+    lines.append("║" + title_sub.center(W - 2) + "║")
     lines.append("║" + f"  审核时间：{report.timestamp}".ljust(W - 2) + "║")
     lines.append("╚" + "═" * (W - 2) + "╝")
 
-    # ── 评分 ──
-    lines.append(f"  评分 {int(report.total_score)}/100  {report.level}")
-    lines.append(f"  建议  {report.suggestion}")
+    # ── 评分（合并建议） ──
+    lines.append(f"\n  📊 {int(report.total_score)}/100  {report.level}  |  {report.suggestion}")
 
     # ── 11项审核（按顺序，无分组标题） ──
     lines.append("")
@@ -771,10 +772,10 @@ def format_report(report: AuditReport) -> str:
 
     lines.append("")
 
-    # ── 底部 ──
-    lines.append("  " + "─" * 50)
-    lines.append("  🔔 请到海通确认KD点后再做决策")
-    lines.append("  " + "─" * 50)
+    # ── 底部（醒目提示） ──
+    lines.append("╔" + "═" * (W - 2) + "╗")
+    lines.append("║" + ("  🔔 请到海通确认KD点后再做决策").center(W - 2) + "║")
+    lines.append("╚" + "═" * (W - 2) + "╝")
 
     return "\n".join(lines)
 
