@@ -302,8 +302,8 @@ class IronSentinelEngine:
 
     # ---- 审核阶段 ----
 
-    def _audit(self) -> List[CheckResult]:
-        """执行全部11项审核"""
+    def _audit(self) -> Tuple[List[CheckResult], List[Dict], str]:
+        """执行全部11项审核，返回(结果列表, 龙头详情, 专家总结)"""
         print("\n🔍 审核中...")
         bars = self._raw.get('daily_bars', [])
         quote = self._raw.get('quote')
@@ -366,6 +366,7 @@ class IronSentinelEngine:
         print(f"\n🏢 龙头详情（近5日 / 今日盘中）:")
         r = check_sector_leaders(sector_name, leader_details, src_used)
         results.append(r)
+        print(f"  [{r.rule_num:02d}] {r.rule_name}: {'✅' if r.passed else '❌'} {r.reason[:50]}")
 
         # 11. 筹码集中
         chip_data = self._raw.get('chip')
@@ -373,7 +374,13 @@ class IronSentinelEngine:
         results.append(r)
         print(f"  [{r.rule_num:02d}] {r.rule_name}: {'✅' if r.passed else '❌'} {r.reason[:50]}")
 
-        return results
+        # 收集龙头详情（用于报告）
+        leader_details, _ = self._fetch_leader_details(sector_name)
+
+        # 自动生成专家总结
+        expert_summary = self._gen_expert_summary(results, quote, leader_details)
+
+        return results, leader_details, expert_summary
 
     def _fetch_leader_details(self, sector_name: str) -> Tuple[List[Dict], str]:
         """获取龙头成分股涨幅数据"""
@@ -406,6 +413,52 @@ class IronSentinelEngine:
 
         return leader_details, src_used
 
+    def _gen_expert_summary(self, results: List['CheckResult'], quote, leader_details) -> str:
+        """根据审核结果生成专家视角总结"""
+        lines = []
+        passed = {r.rule_num: r for r in results if r.passed}
+        failed = {r.rule_num: r for r in results if not r.passed and r.available}
+        unavailable = {r.rule_num: r for r in results if not r.available}
+
+        # 当前价
+        price = quote.get('price', 0) if quote else 0
+
+        # 风险点
+        risks = []
+        if 2 not in passed: risks.append("量能不足，上涨动力有限")
+        if 4 not in passed: risks.append("价格跌破均线，空头排列")
+        if 8 not in passed: risks.append("大盘走势偏弱")
+        if 9 not in passed: risks.append("板块趋势向下")
+        if 10 not in passed: risks.append("龙头股走弱，缺乏领涨标的")
+        if 11 not in passed and 11 in unavailable: risks.append("筹码数据缺失，难以判断主力动向")
+
+        # 亮点
+        pros = []
+        if 1 in passed: pros.append("MACD 红柱扩张，短线动能向好")
+        if 3 in passed: pros.append("主力资金净流入")
+        if 6 in passed: pros.append("分时均价上方运行，多头控盘")
+        if 7 in passed: pros.append("大盘日内未出现明显下行")
+
+        if risks:
+            lines.append(f"⚠️ 风险点：{'；'.join(risks[:3])}。")
+        if pros:
+            lines.append(f"✅ 亮点：{'；'.join(pros[:2])}。")
+
+        # 关键价位
+        if quote:
+            lines.append(f"💰 当前价 {price:.2f} 元，请关注关键支撑位。")
+
+        # 综合建议
+        score = sum(r.score for r in results)
+        if score >= 70:
+            lines.append("📈 综合评估：买点条件较好，可考虑分批建仓。")
+        elif score >= 40:
+            lines.append("⚖️ 综合评估：买点条件一般，建议耐心等待更好时机。")
+        else:
+            lines.append("📉 综合评估：买点条件不足，暂不推荐入场。")
+
+        return " ".join(lines)
+
     # ---- 公开接口 ----
 
     def audit(self) -> 'AuditReport':
@@ -422,7 +475,7 @@ class IronSentinelEngine:
         if not self._fetch_all():
             print("\n⚠️ 数据不足，无法完成审核")
 
-        results = self._audit()
+        results, leader_details, expert_summary = self._audit()
 
         total_score = sum(r.score for r in results)
         passed = sum(1 for r in results if r.passed)
@@ -444,6 +497,8 @@ class IronSentinelEngine:
             level=get_level(total_score),
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             data_sources=self.data_sources,
+            leader_details=leader_details,
+            expert_summary=expert_summary,
         )
 
 
@@ -463,6 +518,8 @@ class AuditReport:
         level: str,
         timestamp: str,
         data_sources: Dict[str, str] = None,
+        leader_details: List[Dict] = None,
+        expert_summary: str = None,
     ):
         self.stock_code = stock_code
         self.stock_name = stock_name
@@ -475,6 +532,8 @@ class AuditReport:
         self.level = level
         self.timestamp = timestamp
         self.data_sources = data_sources or {}
+        self.leader_details = leader_details or []
+        self.expert_summary = expert_summary or ""
 
     def to_dict(self) -> Dict:
         return {
@@ -488,6 +547,8 @@ class AuditReport:
             'suggestion': self.suggestion,
             'timestamp': self.timestamp,
             'data_sources': self.data_sources,
+            'leader_details': self.leader_details,
+            'expert_summary': self.expert_summary,
             'results': [r.to_dict() for r in self.results],
         }
 
@@ -495,24 +556,82 @@ class AuditReport:
 # ==================== 报告格式化 ====================
 
 def format_report(report: AuditReport) -> str:
-    """生成格式化的审核报告"""
+    """生成美化的审核报告：按顺序11项 + 龙头详情 + 专家总结"""
+    def badge(r):
+        if r.passed:    return "✅"
+        if r.available: return "❌"
+        return "⚠️ "
+
+    W = 60
+
+    def clean_reason(reason):
+        reason = re.sub(r'（数据源[:：][^）]+）', '', reason)
+        return reason.strip()
+
     lines = []
-    lines.append("=" * 60)
-    lines.append(f"  📊 {report.stock_name or report.stock_code}({report.stock_code}) 买点审核报告")
-    lines.append(f"  审核时间：{report.timestamp}")
-    lines.append("=" * 60)
-    lines.append("")
-    lines.append(f"  🎯 综合评分：{int(report.total_score)}/100 | {report.level}")
-    lines.append(f"  💡 建议：{report.suggestion}")
-    lines.append("")
 
+    # ── 头部 ──
+    lines.append("╔" + "═" * (W - 2) + "╗")
+    name_str = f"  {report.stock_name or ''}({report.stock_code}) 买点审核报告"
+    lines.append("║" + name_str.center(W - 2) + "║")
+    lines.append("║" + f"  审核时间：{report.timestamp}".ljust(W - 2) + "║")
+    lines.append("╚" + "═" * (W - 2) + "╝")
+
+    # ── 评分 ──
+    score_bar = "█" * int(report.total_score // 5) + "░" * (20 - int(report.total_score // 5))
+    lines.append(f"  评分 [{score_bar}] {int(report.total_score)}/100  {report.level}")
+    lines.append(f"  统计  ✅{report.passed_count}  ❌{report.failed_count}  ⚠️{report.unavailable_count}")
+    lines.append(f"  建议  {report.suggestion}")
+
+    # ── 11项审核（按顺序） ──
+    lines.append("")
+    lines.append("┌──────────────────────────────────────────────────────────────┐")
     for r in report.results:
-        badge = "✅" if r.passed else ("❌" if r.available else "⚠️")
-        lines.append(f"  {badge} {r.rule_name}: {r.reason[:60]}")
+        status = badge(r)
+        name   = f"[{r.rule_num:02d}] {r.rule_name}"
+        reason = clean_reason(r.reason)
+        lines.append(f"│ {status}  {name}")
+        if len(reason) > 52:
+            lines.append(f"│      {reason[:52]}")
+            lines.append(f"│      {reason[52:]}")
+        else:
+            lines.append(f"│      {reason}")
+        lines.append("│")
+    lines.append("└──────────────────────────────────────────────────────────────┘")
 
-    lines.append("-" * 60)
-    lines.append("💡 请到海通确认KD点后再做决策")
-    lines.append("-" * 60)
+    # ── 龙头详情 ──
+    if report.leader_details:
+        lines.append("")
+        lines.append("  🐉 板块龙头详情")
+        lines.append("  " + "-" * 50)
+        lines.append(f"  {'名称':<10} {'近5日':>8}  {'今日盘中':>8}")
+        lines.append("  " + "-" * 50)
+        for d in report.leader_details:
+            g5   = f"{d['gain_5d']:+.2f}%" if d['gain_5d'] != 0 else "  --  "
+            gt   = f"{d['gain_today']:+.2f}%" if d['gain_today'] is not None else "  --  "
+            flag = "📈" if d['gain_today'] and d['gain_today'] > 0 else "📉"
+            lines.append(f"  {d['name']:<10} {g5:>8}  {flag} {gt:>8}")
+        lines.append("")
+
+    # ── 专家总结 ──
+    if report.expert_summary:
+        lines.append("")
+        summary_lines = report.expert_summary.split("\n")
+        lines.append("  🔍 金融专家总结")
+        lines.append("  " + "-" * 50)
+        for sl in summary_lines:
+            if len(sl) > 52:
+                lines.append(f"  {sl[:52]}")
+                lines.append(f"  {sl[52:]}")
+            else:
+                lines.append(f"  {sl}")
+        lines.append("")
+
+    # ── 底部 ──
+    lines.append("  " + "─" * 50)
+    lines.append("  🔔 请到海通确认KD点后再做决策")
+    lines.append("  " + "─" * 50)
+
     return "\n".join(lines)
 
 
