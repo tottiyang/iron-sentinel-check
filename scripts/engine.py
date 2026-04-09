@@ -496,11 +496,6 @@ class AuditReport:
 
 def format_report(report: AuditReport) -> str:
     """生成格式化的审核报告"""
-    def badge(r):
-        if r.passed:    return "✅"
-        if r.available: return "❌"
-        return "⚠️ "
-
     lines = []
     lines.append("=" * 60)
     lines.append(f"  📊 {report.stock_name or report.stock_code}({report.stock_code}) 买点审核报告")
@@ -512,7 +507,8 @@ def format_report(report: AuditReport) -> str:
     lines.append("")
 
     for r in report.results:
-        lines.append(f"  {badge(r)} {r.rule_name}: {r.reason[:60]}")
+        badge = "✅" if r.passed else ("❌" if r.available else "⚠️")
+        lines.append(f"  {badge} {r.rule_name}: {r.reason[:60]}")
 
     lines.append("-" * 60)
     lines.append("💡 请到海通确认KD点后再做决策")
