@@ -633,42 +633,53 @@ class AuditReport:
 # ==================== 报告格式化 ====================
 
 def format_report(report: AuditReport) -> str:
-    """生成格式化的审核报告"""
+    """生成格式化的审核报告（单表格，不分类）"""
     lines = []
-    lines.append("=" * 60)
-    lines.append(f"  📊 {report.stock_name or report.stock_code}({report.stock_code}) 买点审核报告")
-    lines.append(f"  审核时间：{report.timestamp}")
-    lines.append("=" * 60)
+
+    # 表头
+    COL_NUM  = 3
+    COL_NAME = 12
+    COL_JUDGE = 4
+    COL_REASON = 35
+
+    def hr():
+        lines.append("  " + "─" * (COL_NUM + COL_NAME + COL_JUDGE + COL_REASON + 8))
+
+    def row(num, name, judge, reason):
+        if judge is True:
+            judge_str = "✅"
+        elif judge is False:
+            judge_str = "❌"
+        else:
+            judge_str = "⚠️"
+        # 去掉reason中的数据源标注
+        reason = reason.replace("（数据源: neodata）", "").replace("（数据源: akshare）", "").strip()
+        num_str = str(num).rjust(COL_NUM)
+        lines.append(f"  │ {num_str} │ {name:<{COL_NAME}} │ {judge_str} │ {reason:<{COL_REASON}} │")
+
+    lines.append("  " + "═" * (COL_NUM + COL_NAME + COL_JUDGE + COL_REASON + 6))
+    lines.append(f"  ║ 股票：{report.stock_name or report.stock_code}({report.stock_code})".ljust(COL_NUM + COL_NAME + COL_JUDGE + COL_REASON + 6) + "  ║")
+    lines.append(f"  ║ 时间：{report.timestamp}".ljust(COL_NUM + COL_NAME + COL_JUDGE + COL_REASON + 6) + "  ║")
+    lines.append("  " + "═" * (COL_NUM + COL_NAME + COL_JUDGE + COL_REASON + 6))
+    hr()
+    row("#", "审核项", None, "判断结果与依据")
+    hr()
+    for r in report.results:
+        avail = r.available
+        row(
+            r.rule_num,
+            r.rule_name,
+            r.passed if avail else None,
+            r.reason[:COL_REASON] if avail else r.reason[:COL_REASON]
+        )
+    WIDTH = COL_NUM + COL_NAME + COL_JUDGE + COL_REASON + 8
+    score_bar = "✅" * report.passed_count + "❌" * report.failed_count + "⚠️" * report.unavailable_count
+    score_line = f"  ║  综合评分：{int(report.total_score):>3}/100  {score_bar}  {report.level}  ║"
+    lines.append(score_line.ljust(WIDTH + 4))
+    lines.append("  " + "═" * WIDTH)
     lines.append("")
-    lines.append(f"  🎯 综合评分：{int(report.total_score)}/100 | {report.level}")
-    lines.append(f"  💡 建议：{report.suggestion}")
-    lines.append("")
-
-    passed    = [r for r in report.results if r.passed]
-    failed    = [r for r in report.results if not r.passed and r.available]
-    unavail   = [r for r in report.results if not r.available]
-
-    if passed:
-        lines.append("✅ 通过项：")
-        for r in passed:
-            lines.append(f"  • {r.rule_name}: {r.reason[:70]}")
-        lines.append("")
-
-    if failed:
-        lines.append("❌ 未通过项：")
-        for r in failed:
-            lines.append(f"  • {r.rule_name}: {r.reason[:70]}")
-        lines.append("")
-
-    if unavail:
-        lines.append("⚠️ 数据不可用：")
-        for r in unavail:
-            lines.append(f"  • {r.rule_name}: {r.reason[:70]}")
-        lines.append("")
-
-    lines.append("-" * 60)
-    lines.append("💡 请到海通确认KD点后再做决策")
-    lines.append("-" * 60)
+    lines.append(f"  💡 {report.suggestion}")
+    lines.append(f"  🔔 请到海通确认KD点后再做决策")
     return "\n".join(lines)
 
 
