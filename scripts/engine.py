@@ -495,43 +495,33 @@ class AuditReport:
 # ==================== 报告格式化 ====================
 
 def format_report(report: AuditReport) -> str:
-    """生成格式化的审核报告"""
+    """按顺序排列全部审核项，逐一显示状态和依据"""
+    def badge(r):
+        if r.passed:   return "✅"
+        if r.available: return "❌"
+        return "⚠️"
+
+    W = 60
     lines = []
-    lines.append("=" * 60)
+    lines.append("=" * W)
     lines.append(f"  📊 {report.stock_name or report.stock_code}({report.stock_code}) 买点审核报告")
     lines.append(f"  审核时间：{report.timestamp}")
-    lines.append("=" * 60)
+    lines.append("=" * W)
     lines.append("")
     lines.append(f"  🎯 综合评分：{int(report.total_score)}/100 | {report.level}")
     lines.append(f"  💡 建议：{report.suggestion}")
     lines.append("")
+    lines.append("-" * W)
 
-    # 通过/失败/不可用统计
-    passed_items = [r for r in report.results if r.passed]
-    failed_items = [r for r in report.results if not r.passed and r.available]
-    unavail_items = [r for r in report.results if not r.available]
-
-    if passed_items:
-        lines.append("✅ 通过项：")
-        for r in passed_items:
-            lines.append(f"  • {r.rule_name}: {r.reason[:60]}")
+    # 按顺序逐项列出
+    for r in report.results:
+        lines.append(f"  {badge(r)} {r.rule_name}")
+        lines.append(f"     {r.reason[:W-7]}")
         lines.append("")
 
-    if failed_items:
-        lines.append("❌ 未通过项：")
-        for r in failed_items:
-            lines.append(f"  • {r.rule_name}: {r.reason[:60]}")
-        lines.append("")
-
-    if unavail_items:
-        lines.append("⚠️ 数据不可用：")
-        for r in unavail_items:
-            lines.append(f"  • {r.rule_name}: {r.reason[:60]}")
-        lines.append("")
-
-    lines.append("-" * 60)
+    lines.append("-" * W)
     lines.append("💡 请到海通确认KD点后再做决策")
-    lines.append("-" * 60)
+    lines.append("-" * W)
     return "\n".join(lines)
 
 
