@@ -633,43 +633,46 @@ class AuditReport:
 # ==================== 报告格式化 ====================
 
 def format_report(report: AuditReport) -> str:
-    """生成格式化的审核报告"""
-    lines = []
-    lines.append("=" * 60)
-    lines.append(f"  📊 {report.stock_name or report.stock_code}({report.stock_code}) 买点审核报告")
-    lines.append(f"  审核时间：{report.timestamp}")
-    lines.append("=" * 60)
-    lines.append("")
-    lines.append(f"  🎯 综合评分：{int(report.total_score)}/100 | {report.level}")
-    lines.append(f"  💡 建议：{report.suggestion}")
-    lines.append("")
+    """生成简洁的单列表审核报告"""
+    def badge(r):
+        if r.passed:   return "[PASS]"
+        if r.available: return "[FAIL]"
+        return "[N/A] "
 
-    passed    = [r for r in report.results if r.passed]
-    failed    = [r for r in report.results if not r.passed and r.available]
-    unavail   = [r for r in report.results if not r.available]
+    def clean_reason(reason, max_len=60):
+        # 去掉 reason 中的数据源标注
+        reason = reason.replace("（数据源: neodata）", "").replace("（数据源: akshare）", "").strip()
+        return reason[:max_len]
 
-    if passed:
-        lines.append("✅ 通过项：")
-        for r in passed:
-            lines.append(f"  • {r.rule_name}: {r.reason[:70]}")
-        lines.append("")
+    W = 62
+    star = "=" * W
+    line = "-" * W
 
-    if failed:
-        lines.append("❌ 未通过项：")
-        for r in failed:
-            lines.append(f"  • {r.rule_name}: {r.reason[:70]}")
-        lines.append("")
+    out = []
+    out.append(star)
+    out.append(f"  {report.stock_name or report.stock_code} ({report.stock_code})")
+    out.append(f"  审核时间：{report.timestamp}")
+    out.append(star)
+    out.append("")
 
-    if unavail:
-        lines.append("⚠️ 数据不可用：")
-        for r in unavail:
-            lines.append(f"  • {r.rule_name}: {r.reason[:70]}")
-        lines.append("")
+    # 逐项列出
+    for r in report.results:
+        status = badge(r)
+        name   = f"[{r.rule_num:02d}] {r.rule_name}"
+        reason = clean_reason(r.reason)
+        out.append(f"  {status}  {name}")
+        out.append(f"         {reason}")
+        out.append("")
 
-    lines.append("-" * 60)
-    lines.append("💡 请到海通确认KD点后再做决策")
-    lines.append("-" * 60)
-    return "\n".join(lines)
+    out.append(line)
+    out.append(f"  综合评分：{int(report.total_score):3d}/100  |  {report.level}")
+    out.append(f"  审核结果：PASS {report.passed_count}  |  FAIL {report.failed_count}  |  N/A {report.unavailable_count}")
+    out.append(f"  {report.suggestion}")
+    out.append(line)
+    out.append(f"  请到海通确认KD点后再做决策")
+    out.append(line)
+
+    return "\n".join(out)
 
 
 # ==================== CLI 入口 ====================
