@@ -772,7 +772,7 @@ def format_report(report: AuditReport) -> str:
 
     # ── 底部（醒目提示） ──
     lines.append("")
-    lines.append("  ⚠️  请到海通确认KD点后再做决策  ⚠️")
+    lines.append("  ⚠️  【请到海通确认KD点后再做决策】  ⚠️")
     lines.append("")
 
     return "\n".join(lines)
