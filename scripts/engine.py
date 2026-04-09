@@ -647,11 +647,10 @@ def format_report(report: AuditReport) -> str:
 
     lines = []
 
-    # ── 头部（标题加大） ──
+    # ── 头部 ──
     lines.append("╔" + "═" * (W - 2) + "╗")
-    name_str = f"{report.stock_name or ''}({report.stock_code})"
+    name_str = f"  {report.stock_name or ''}({report.stock_code}) 买点审核报告"
     lines.append("║" + name_str.center(W - 2) + "║")
-    lines.append("║" + "买点审核报告".center(W - 2) + "║")
     lines.append("║" + f"  审核时间：{report.timestamp}".ljust(W - 2) + "║")
     lines.append("╚" + "═" * (W - 2) + "╝")
 
