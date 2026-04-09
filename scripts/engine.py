@@ -373,6 +373,8 @@ class IronSentinelEngine:
         results.append(r)
         print(f"  [{r.rule_num:02d}] {r.rule_name}: {'✅' if r.passed else '❌'} {r.reason[:50]}")
 
+        # 龙头详情保存到实例，供报告使用
+        self._leader_details = leader_details
         return results
 
     def _fetch_leader_details(self, sector_name: str) -> Tuple[List[Dict], str]:
@@ -444,6 +446,7 @@ class IronSentinelEngine:
             level=get_level(total_score),
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             data_sources=self.data_sources,
+            leader_details=getattr(self, '_leader_details', []),
         )
 
 
@@ -463,6 +466,7 @@ class AuditReport:
         level: str,
         timestamp: str,
         data_sources: Dict[str, str] = None,
+        leader_details: List[Dict] = None,
     ):
         self.stock_code = stock_code
         self.stock_name = stock_name
@@ -475,6 +479,43 @@ class AuditReport:
         self.level = level
         self.timestamp = timestamp
         self.data_sources = data_sources or {}
+        self.leader_details = leader_details or []
+
+    @property
+    def expert_summary(self) -> str:
+        """根据审核结果生成金融专家视角总结"""
+        score = self.total_score
+        passed = [r for r in self.results if r.passed]
+        failed = [r for r in self.results if not r.passed and r.available]
+        unavailable = [r for r in self.results if not r.available]
+
+        positives = [r for r in passed if r.rule_num not in (3, 5) or r.available]
+        negatives = failed
+
+        lines = []
+
+        if score >= 70:
+            lines.append(f"✅ 综合评分 {int(score)} 分，{len(passed)}/11 项通过，结构健康")
+        elif score >= 40:
+            lines.append(f"⚠️ 综合评分 {int(score)} 分，{len(passed)}/11 项通过，但存在关键短板")
+        else:
+            lines.append(f"❌ 综合评分 {int(score)} 分，仅 {len(passed)}/11 项通过，风险较高")
+
+        # 核心利好
+        if positives:
+            top_pos = positives[0]
+            lines.append(f"• 最大亮点：{top_pos.rule_name}——{top_pos.reason.split('。')[0][:40]}")
+
+        # 核心风险
+        if negatives:
+            top_neg = negatives[0]
+            lines.append(f"• 最大风险：{top_neg.rule_name}——{top_neg.reason.split('。')[0][:40]}")
+
+        # 数据可用性
+        if unavailable:
+            lines.append(f"• ⚠️ {len(unavailable)} 项数据不可用，判断依据不完整")
+
+        return "\n".join(lines)
 
     def to_dict(self) -> Dict:
         return {
@@ -488,6 +529,7 @@ class AuditReport:
             'suggestion': self.suggestion,
             'timestamp': self.timestamp,
             'data_sources': self.data_sources,
+            'leader_details': self.leader_details,
             'results': [r.to_dict() for r in self.results],
         }
 
@@ -495,33 +537,88 @@ class AuditReport:
 # ==================== 报告格式化 ====================
 
 def format_report(report: AuditReport) -> str:
-    """按顺序排列全部审核项，逐一显示状态和依据"""
+    """生成美化的审核报告：按顺序11项 + 龙头详情 + 专家总结"""
     def badge(r):
-        if r.passed:   return "✅"
+        if r.passed:    return "✅"
         if r.available: return "❌"
-        return "⚠️"
+        return "⚠️ "
 
     W = 60
-    lines = []
-    lines.append("=" * W)
-    lines.append(f"  📊 {report.stock_name or report.stock_code}({report.stock_code}) 买点审核报告")
-    lines.append(f"  审核时间：{report.timestamp}")
-    lines.append("=" * W)
-    lines.append("")
-    lines.append(f"  🎯 综合评分：{int(report.total_score)}/100 | {report.level}")
-    lines.append(f"  💡 建议：{report.suggestion}")
-    lines.append("")
-    lines.append("-" * W)
 
-    # 按顺序逐项列出
+    def block(title, body_lines):
+        return ["", f"┌─ {title} ", f"│ {body_lines[0]}"] + \
+               [f"│ {l}" for l in body_lines[1:]] + ["└" + "─" * (W - 1)]
+
+    def clean_reason(reason):
+        reason = re.sub(r'（数据源[:：][^）]+）', '', reason)
+        return reason.strip()
+
+    lines = []
+
+    # ── 头部 ──
+    lines.append("╔" + "═" * (W - 2) + "╗")
+    name_str = f"  {report.stock_name or ''}({report.stock_code}) 买点审核报告"
+    lines.append("║" + name_str.center(W - 2) + "║")
+    lines.append("║" + f"  审核时间：{report.timestamp}".ljust(W - 2) + "║")
+    lines.append("╚" + "═" * (W - 2) + "╝")
+
+    # ── 评分 ──
+    score_bar = "█" * int(report.total_score // 5) + "░" * (20 - int(report.total_score // 5))
+    lines.append(f"  评分 [{score_bar}] {int(report.total_score)}/100  {report.level}")
+    lines.append(f"  统计  ✅{report.passed_count}  ❌{report.failed_count}  ⚠️{report.unavailable_count}")
+    lines.append(f"  建议  {report.suggestion}")
+
+    # ── 11项审核 ──
+    lines.append("")
+    lines.append("┌──────────────────────────────────────────────────────────────┐")
     for r in report.results:
-        lines.append(f"  {badge(r)} {r.rule_name}")
-        lines.append(f"     {r.reason[:W-7]}")
+        status = badge(r)
+        name   = f"[{r.rule_num:02d}] {r.rule_name}"
+        reason = clean_reason(r.reason)
+        # 折行
+        lines.append(f"│ {status}  {name}")
+        # 理由最多两行
+        if len(reason) > 52:
+            lines.append(f"│      {reason[:52]}")
+            lines.append(f"│      {reason[52:]}")
+        else:
+            lines.append(f"│      {reason}")
+        lines.append("│")
+    lines.append("└──────────────────────────────────────────────────────────────┘")
+
+    # ── 龙头详情 ──
+    if report.leader_details:
+        lines.append("")
+        lines.append("  🐉 板块龙头详情")
+        lines.append("  " + "-" * 50)
+        lines.append(f"  {'名称':<10} {'近5日':>8}  {'今日盘中':>8}")
+        lines.append("  " + "-" * 50)
+        for d in report.leader_details:
+            g5   = f"{d['gain_5d']:+.2f}%" if d['gain_5d'] != 0 else "  --  "
+            gt   = f"{d['gain_today']:+.2f}%" if d['gain_today'] is not None else "  --  "
+            flag = "📈" if d['gain_today'] and d['gain_today'] > 0 else "📉"
+            lines.append(f"  {d['name']:<10} {g5:>8}  {flag} {gt:>8}")
         lines.append("")
 
-    lines.append("-" * W)
-    lines.append("💡 请到海通确认KD点后再做决策")
-    lines.append("-" * W)
+    # ── 专家总结 ──
+    if report.expert_summary:
+        lines.append("")
+        summary_lines = report.expert_summary.split("\n")
+        lines.append("  🔍 金融专家总结")
+        lines.append("  " + "-" * 50)
+        for sl in summary_lines:
+            if len(sl) > 52:
+                lines.append(f"  {sl[:52]}")
+                lines.append(f"  {sl[52:]}")
+            else:
+                lines.append(f"  {sl}")
+        lines.append("")
+
+    # ── 底部 ──
+    lines.append("  " + "─" * 50)
+    lines.append("  🔔 请到海通确认KD点后再做决策")
+    lines.append("  " + "─" * 50)
+
     return "\n".join(lines)
 
 
