@@ -511,7 +511,7 @@ class IronSentinelEngine:
 
         print(f"\n📊 最终评分: {int(total_score)}分 — {get_level(total_score)}")
 
-        return results
+        return results, leader_details
 
     def _fetch_leader_details(self, sector_name: str) -> Tuple[List[Dict], str]:
         """获取龙头成分股涨幅数据"""
@@ -562,7 +562,7 @@ class IronSentinelEngine:
         if not self._fetch_all():
             print("\n⚠️ 数据不足，无法完成审核")
 
-        results = self._audit()
+        results, leader_details = self._audit()
 
         total_score = sum(r.score for r in results)
         passed      = sum(1 for r in results if r.passed)
@@ -581,6 +581,7 @@ class IronSentinelEngine:
             level=get_level(total_score),
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             data_sources=self.data_sources,
+            leader_details=leader_details,
         )
 
 
@@ -600,6 +601,7 @@ class AuditReport:
         level: str,
         timestamp: str,
         data_sources: Dict[str, str] = None,
+        leader_details: List[Dict] = None,
     ):
         self.stock_code        = stock_code
         self.stock_name        = stock_name
@@ -612,6 +614,7 @@ class AuditReport:
         self.level             = level
         self.timestamp         = timestamp
         self.data_sources      = data_sources or {}
+        self.leader_details    = leader_details or []
 
     def to_dict(self) -> Dict:
         return {
@@ -672,20 +675,6 @@ def format_report(report: AuditReport) -> str:
             lines.append(f"│      {reason}")
         lines.append("│")
     lines.append("└──────────────────────────────────────────────────────────────┘")
-
-    # ── 龙头详情 ──
-    if getattr(report, 'leader_details', None):
-        lines.append("")
-        lines.append("  🐉 板块龙头详情")
-        lines.append("  " + "-" * 50)
-        lines.append(f"  {'名称':<10} {'近5日':>8}  {'今日盘中':>8}")
-        lines.append("  " + "-" * 50)
-        for d in getattr(report, 'leader_details', []):
-            g5   = f"{d['gain_5d']:+.2f}%" if d['gain_5d'] != 0 else "  --  "
-            gt   = f"{d['gain_today']:+.2f}%" if d['gain_today'] is not None else "  --  "
-            flag = "📈" if d['gain_today'] and d['gain_today'] > 0 else "📉"
-            lines.append(f"  {d['name']:<10} {g5:>8}  {flag} {gt:>8}")
-        lines.append("")
 
     # ── 专家总结（自动生成） ──
     passed   = [r for r in report.results if r.passed]
@@ -769,6 +758,19 @@ def format_report(report: AuditReport) -> str:
         lines.append(f"  🚫 综合评估：风险较高，不建议入场")
 
     lines.append("")
+
+    # ── 龙头详情（表格下方） ──
+    if report.leader_details:
+        lines.append("  🐉 板块龙头详情")
+        lines.append("  " + "-" * 50)
+        lines.append(f"  {'名称':<10} {'近5日':>8}  {'今日盘中':>8}")
+        lines.append("  " + "-" * 50)
+        for d in report.leader_details:
+            g5   = f"{d['gain_5d']:+.2f}%" if d['gain_5d'] != 0 else "  --  "
+            gt   = f"{d['gain_today']:+.2f}%" if d['gain_today'] is not None else "  --  "
+            flag = "📈" if d['gain_today'] and d['gain_today'] > 0 else "📉"
+            lines.append(f"  {d['name']:<10} {g5:>8}  {flag} {gt:>8}")
+        lines.append("")
 
     # ── 底部 ──
     lines.append("  " + "─" * 50)
