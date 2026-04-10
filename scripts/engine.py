@@ -510,7 +510,6 @@ class IronSentinelEngine:
         unavailable = sum(1 for r in results if not r.available)
 
         print(f"\n📊 最终评分: {int(total_score)}分 — {get_level(total_score)}")
-        print(f"   ✅通过 {passed}/11 | ❌失败 {failed}/11 | ⚠️不可用 {unavailable}/11")
 
         return results
 
