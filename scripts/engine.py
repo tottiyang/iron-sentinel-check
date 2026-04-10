@@ -792,7 +792,7 @@ def format_report(report: AuditReport) -> str:
         if r.available: return "❌"
         return "⚠️ "
 
-    W = 60
+    DIVIDER = "  " + "─" * 58
 
     def clean_reason(reason):
         reason = re.sub(r'（数据源[:：][^）]+）', '', reason)
@@ -801,31 +801,27 @@ def format_report(report: AuditReport) -> str:
     lines = []
 
     # ── 头部 ──
-    lines.append("╔" + "═" * (W - 2) + "╗")
-    name_str = f"  {report.stock_name or ''}({report.stock_code}) 买点审核报告"
-    lines.append("║" + name_str.center(W - 2) + "║")
-    lines.append("║" + f"  审核时间：{report.timestamp}".ljust(W - 2) + "║")
-    lines.append("╚" + "═" * (W - 2) + "╝")
+    lines.append(f"  🩸 {report.stock_name or ''}({report.stock_code}) 买点审核报告")
+    lines.append(f"  审核时间：{report.timestamp}")
+    lines.append(DIVIDER)
 
     # ── 评分 ──
     lines.append(f"  评分 {int(report.total_score)}/100  {report.level}")
     lines.append(f"  建议  {report.suggestion}")
+    lines.append("")
 
     # ── 11项审核（按顺序，无分组标题） ──
-    lines.append("")
-    lines.append("┌──────────────────────────────────────────────────────────────┐")
     for r in report.results:
         status = badge(r)
         name   = f"[{r.rule_num:02d}] {r.rule_name}"
         reason = clean_reason(r.reason)
-        lines.append(f"│ {status}  {name}")
+        lines.append(f"  {status}  {name}")
         if len(reason) > 52:
-            lines.append(f"│      {reason[:52]}")
-            lines.append(f"│      {reason[52:]}")
+            lines.append(f"       {reason[:52]}")
+            lines.append(f"       {reason[52:]}")
         else:
-            lines.append(f"│      {reason}")
-        lines.append("│")
-    lines.append("└──────────────────────────────────────────────────────────────┘")
+            lines.append(f"       {reason}")
+        lines.append("")
 
     # ── 专家总结（自动生成） ──
     passed   = [r for r in report.results if r.passed]
