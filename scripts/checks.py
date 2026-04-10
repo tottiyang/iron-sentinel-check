@@ -97,6 +97,63 @@ def _get_time_weight() -> float:
     return w
 
 
+def _calc_passed_weight(now: Optional[datetime] = None) -> float:
+    """
+    计算已过交易时段权重（分段权重推算法）
+    用于量能盘中估算。
+
+    权重分段:
+      9:30-10:00  权重 25%（开盘期）
+      10:00-11:30 权重 30%（上午主交易期）
+      11:30-13:00 权重 0%（午间休市，跳过）
+      13:00-13:30 权重 15%（下午开盘）
+      13:30-14:30 权重 15%（下午主交易期）
+      14:30-15:00 权重 15%（尾盘）
+
+    Returns:
+        0-1 之间的权重，15:00 时 = 1.0
+    """
+    if now is None:
+        now = datetime.now()
+    h, m = now.hour, now.minute
+    cur_min = h * 60 + m
+    passed = 0.0
+
+    # 9:30-10:00（权重25%）
+    if cur_min >= 10 * 60:
+        passed += 0.25
+    elif cur_min >= 9 * 60 + 30:
+        passed += 0.25 * (cur_min - (9 * 60 + 30)) / 30
+
+    # 10:00-11:30（权重30%）
+    if cur_min >= 11 * 60 + 30:
+        passed += 0.30
+    elif cur_min >= 10 * 60:
+        passed += 0.30 * (cur_min - 10 * 60) / 90
+
+    # 午间休市（跳过）
+
+    # 13:00-13:30（权重15%）
+    if cur_min >= 13 * 60 + 30:
+        passed += 0.15
+    elif cur_min >= 13 * 60:
+        passed += 0.15 * (cur_min - 13 * 60) / 30
+
+    # 13:30-14:30（权重15%）
+    if cur_min >= 14 * 60 + 30:
+        passed += 0.15
+    elif cur_min >= 13 * 60 + 30:
+        passed += 0.15 * (cur_min - (13 * 60 + 30)) / 60
+
+    # 14:30-15:00（权重15%）
+    if cur_min >= 15 * 60:
+        passed += 0.15
+    elif cur_min >= 14 * 60 + 30:
+        passed += 0.15 * (cur_min - (14 * 60 + 30)) / 30
+
+    return min(passed, 1.0)
+
+
 # ==================== 工具函数 ====================
 
 def _safe_float(v: Any, default: float = 0.0) -> float:
@@ -207,7 +264,11 @@ def check_macd(bars: List[Dict], realtime: Dict) -> CheckResult:
 def check_volume(bars: List[Dict], realtime: Dict) -> CheckResult:
     """
     [2] 量能放大
-    通过条件：今日成交量 > 近5日均量 × 1.1，且量能持续放大
+    盘中（当前时间 < 15:00 且 bars[-1] 有实时数据）:
+        估算全天量 = 今日盘中累计量 / passed_weight(now)
+        通过条件: 估算全天量 > 近5日均量 × 1.1
+    盘后（当前时间 >= 15:00 或 bars[-1] 无实时标记）:
+        通过条件: 今日全天量 > 近5日均量 × 1.1
     """
     if not bars or len(bars) < 6:
         return CheckResult(
@@ -216,34 +277,51 @@ def check_volume(bars: List[Dict], realtime: Dict) -> CheckResult:
         )
 
     try:
-        today_vol = _safe_float(bars[-1].get('vol', 0))
-        prev_vol = _safe_float(bars[-2].get('vol', 0))
-        avg_vol = _calc_avg_volume(bars, 5)
+        now = datetime.now()
+        market_close = now.replace(hour=15, minute=0, second=0, microsecond=0)
+        today_vol_raw = _safe_float(bars[-1].get('vol', 0))
+        yesterday_vol = _safe_float(bars[-2].get('vol', 0))
+        # 均量基准：用昨日往前5天（不含今日）作为历史均量，避免今日部分量拉低基数
+        hist_bars = bars[-6:-1]  # 不含今日和昨日，共5天
+        hist_vol_avg = sum(_safe_float(b.get('vol', 0)) for b in hist_bars) / max(len(hist_bars), 1)
+        prev_vol = _safe_float(bars[-2].get('vol', 0))  # 昨日全天量
 
-        vol_ratio = today_vol / avg_vol if avg_vol > 0 else 0
-        vol_chg = today_vol / prev_vol if prev_vol > 0 else 0
+        # 判断盘中/盘后：bars[-1] 有 is_today=True 标记且未收盘 = 盘中
+        is_live = bars[-1].get('is_today') is True and now < market_close
+        passed_w = _calc_passed_weight(now)
 
-        passed = today_vol > avg_vol * 1.1 and vol_chg >= 0.95
-
-        if passed:
-            reason = (f"今日{_fmt_vol(today_vol)}手 > 均量×1.1({_fmt_vol(avg_vol * 1.1)}手)"
-                      f" + 持续放量({vol_chg:.2f}×)")
+        if is_live and passed_w >= 0.05:
+            # 盘中模式：估算全天量，与历史均量（不含今日）和昨日量双重对比
+            estimated_full = today_vol_raw / passed_w
+            ratio_vs_avg = estimated_full / hist_vol_avg if hist_vol_avg > 0 else 0
+            ratio_vs_yesterday = estimated_full / prev_vol if prev_vol > 0 else 0
+            # 通过条件：估算全天 > 历史均量 × 1.1
+            passed = ratio_vs_avg > 1.1
+            reason = (f"盘中{passed_w:.0%}已过："
+                      f"累计{_fmt_vol(today_vol_raw)}手 ÷ {passed_w:.0%} "
+                      f"= 估全天{_fmt_vol(estimated_full)}手 "
+                      f"{'✅' if passed else '❌'} 历史均量×1.1={_fmt_vol(hist_vol_avg*1.1)}手"
+                      f"，比值{ratio_vs_avg:.2f}×（vs昨日{ratio_vs_yesterday:.2f}×）")
         else:
-            reason = (f"今日{_fmt_vol(today_vol)}手 "
-                      f"{'<' if today_vol <= avg_vol * 1.1 else '≥'}均量×1.1({_fmt_vol(avg_vol * 1.1)}手)")
-
-        tw = _get_time_weight()
-        final_score = _score(passed, WEIGHTS[2]) * tw if tw > 0 else _score(passed, WEIGHTS[2])
+            # 盘后模式
+            ratio_vs_avg = today_vol_raw / hist_vol_avg if hist_vol_avg > 0 else 0
+            passed = ratio_vs_avg > 1.1
+            method_tag = "盘中权重<5%" if is_live else "盘后"
+            reason = (f"{method_tag}：全天{_fmt_vol(today_vol_raw)}手 "
+                      f"{'✅' if passed else '❌'} 历史均量×1.1={_fmt_vol(hist_vol_avg*1.1)}手"
+                      f"，比值{ratio_vs_avg:.2f}×（vs昨日{today_vol_raw/prev_vol:.2f}×）")
 
         return CheckResult(
-            2, NAMES[2], passed, final_score,
-            {'today_vol': today_vol, 'avg_vol': avg_vol, 'ratio': vol_ratio, 'chg': vol_chg},
+            2, NAMES[2], passed, _score(passed, WEIGHTS[2]),
+            {'today_vol': today_vol_raw, 'hist_vol_avg': hist_vol_avg,
+             'prev_vol': prev_vol, 'estimated_full': estimated_full if is_live else today_vol_raw,
+             'passed_weight': passed_w, 'is_live': is_live},
             reason, True, "computed",
         )
 
     except Exception as e:
         return CheckResult(2, NAMES[2], False, 0.0, None,
-                            f"[计算错误] {str(e)[:30]}", False, "computed")
+                           f"[计算错误] {str(e)[:50]}", False, "computed")
 
 
 def check_mainforce(flow_data: Optional[Dict]) -> CheckResult:

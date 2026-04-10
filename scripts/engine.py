@@ -472,30 +472,38 @@ class IronSentinelEngine:
                 f"查询{self.stock_code}股东户数、股东人数环比变化(%)、前十大流通股东持股合计比例(%)、前十大流通股东占比(%)、筹码集中度及近季度变化趋势"
             )
             if not err and result:
-                txt = nd_extract_text(result, "股东股本与机构持仓情况")
+                # 尝试多种type_hint（NeoData版本不同返回不同）
+                for hint in ["股东", "筹码", "股东股本与机构持仓情况", "基本面"]:
+                    txt = nd_extract_text(result, hint)
+                    if txt and ('股东' in txt or '筹码' in txt):
+                        break
                 if txt:
                     def extract_float(pattern, text):
                         m = re.search(pattern, text)
                         return float(m.group(1)) if m else None
 
                     # 股东户数（万户）
-                    hc_m = re.search(r'股东人数[:：]\s*([\d.]+)\s*万户', txt)
+                    hc_m = re.search(r'股东人数\s*([\d.]+)\s*万户', txt)
                     if hc_m:
                         holder_count = float(hc_m.group(1)) * 10000
 
-                    # 环比变化（%）
-                    chg_m = re.search(r'股东人数环比变化[:：]\s*([-\d.]+)%?', txt)
+                    # 环比变化（%，支持括号内格式：股东人数环比变化10.87%））
+                    chg_m = re.search(r'股东人数环比变化[（(]?[^)\d]*([-\d.]+)%?', txt)
                     if chg_m:
                         holder_chg = float(chg_m.group(1))
 
-                    # 前十流通股（%）
-                    t10_m = re.search(r'前十大流通股东[^占比]*占比[:：]\s*([\d.]+)%?', txt)
-                    if not t10_m:
-                        t10_m = re.search(r'前十大流通股东持股合计[:：]\s*([\d.]+)%?', txt)
-                    if not t10_m:
-                        t10_m = re.search(r'前十流通股占比[:：]\s*([\d.]+)%?', txt)
-                    if t10_m:
-                        top10_float = float(t10_m.group(1))
+                    # 前十流通股（%，支持多种格式）
+                    for pat in [
+                        r'前十大流通股东[^占比\d]*占比[^:\d]*[:：]?\s*([\d.]+)%',
+                        r'前十大流通股东持股[^占比\d]*占比[^:\d]*[:：]?\s*([\d.]+)%',
+                        r'前十[流大]?通股东[^占比\d]*占比[^:\d]*[:：]?\s*([\d.]+)%',
+                        r'前十大流通股东[^持比]*持[^:\d]*[:：]?\s*([\d.]+)%',
+                        r'前十流通股占比[:：]?\s*([\d.]+)%',
+                    ]:
+                        t10_m = re.search(pat, txt)
+                        if t10_m:
+                            top10_float = float(t10_m.group(1))
+                            break
 
                     # 更新日期
                     date_m = re.search(r'根据([\d\-]+)更新', txt)
