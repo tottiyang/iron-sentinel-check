@@ -783,149 +783,6 @@ class AuditReport:
         return stored == current
 
 
-# ==================== 报告格式化 ====================
-
-def format_report(report: AuditReport) -> str:
-    """生成美化的审核报告：按顺序11项 + 龙头详情 + 专家总结"""
-    def badge(r):
-        if r.passed:    return "✅"
-        if r.available: return "❌"
-        return "⚠️ "
-
-    DIVIDER = "  " + "─" * 58
-
-    def clean_reason(reason):
-        reason = re.sub(r'（数据源[:：][^）]+）', '', reason)
-        return reason.strip()
-
-    lines = []
-
-    # ── 头部 ──
-    lines.append(f"  🩸 {report.stock_name or ''}({report.stock_code}) 买点审核报告")
-    lines.append(f"  审核时间：{report.timestamp}")
-    lines.append(DIVIDER)
-
-    # ── 评分 ──
-    lines.append(f"  评分 {int(report.total_score)}/100  {report.level}")
-    lines.append(f"  建议  {report.suggestion}")
-    lines.append("")
-
-    # ── 11项审核（按顺序，无分组标题） ──
-    for r in report.results:
-        status = badge(r)
-        name   = f"[{r.rule_num:02d}] {r.rule_name}"
-        reason = clean_reason(r.reason)
-        lines.append(f"  {status}  {name}")
-        if len(reason) > 52:
-            lines.append(f"       {reason[:52]}")
-            lines.append(f"       {reason[52:]}")
-        else:
-            lines.append(f"       {reason}")
-        lines.append("")
-
-    # ── 专家总结（自动生成） ──
-    passed   = [r for r in report.results if r.passed]
-    failed   = [r for r in report.results if not r.passed and r.available]
-    unavail  = [r for r in report.results if not r.available]
-    score    = int(report.total_score)
-
-    obs = []
-    # 通过项 → 亮点
-    for r in passed:
-        rn = r.rule_num
-        reason = r.reason
-        if rn == 1 and '红柱' in reason:
-            obs.append("MACD 红柱扩张，短线动能向好")
-        elif rn == 2 and '均量' in reason:
-            obs.append("量能放大，上涨有资金支撑")
-        elif rn == 3 and '净流入' in reason:
-            obs.append("主力净流入积极，机构在吸筹")
-        elif rn == 4 and '多头' in reason:
-            obs.append("均线多头排列，短期趋势向好")
-        elif rn == 5:
-            obs.append("基本面数据良好，估值合理")
-        elif rn == 6 and '多头' in reason:
-            obs.append("分时均价上方运行，多头控盘")
-        elif rn == 7:
-            obs.append("大盘日内走势稳健，指数安全边际较高")
-        elif rn == 8:
-            obs.append("大盘趋势向上，中期环境偏多")
-        elif rn == 9:
-            obs.append("板块走势强劲，景气度较高")
-        elif rn == 10:
-            obs.append("板块龙头表现活跃，龙头效应明显")
-        elif rn == 11:
-            obs.append("筹码集中度高，主力控盘能力强")
-
-    # 失败项 → 风险
-    risks = []
-    for r in failed:
-        rn = r.rule_num
-        reason = r.reason
-        if rn == 1 and '绿柱' in reason:
-            risks.append("MACD 绿柱，空头动能尚未结束")
-        elif rn == 2:
-            risks.append("量能不足，上涨动力有限")
-        elif rn == 3:
-            risks.append("主力资金持续流出，机构在减仓")
-        elif rn == 4:
-            risks.append("价格跌破均线，空头排列尚未扭转")
-        elif rn == 5:
-            risks.append("基本面数据不佳，估值偏高或业绩下滑")
-        elif rn == 6:
-            risks.append("股价在均价下方运行，空头控盘")
-        elif rn == 7:
-            risks.append("大盘日内走势偏弱")
-        elif rn == 8:
-            risks.append("大盘趋势向下，中期环境偏空")
-        elif rn == 9:
-            risks.append("板块走势偏弱，拖累个股")
-        elif rn == 10:
-            risks.append("龙头表现疲软，板块整体低迷")
-        elif rn == 11:
-            risks.append("筹码分散，主力控盘能力弱")
-
-    lines.append("")
-    lines.append("  🔍 金融专家总结")
-    lines.append("  " + "-" * 50)
-
-    if risks:
-        for risk in risks[:3]:
-            lines.append(f"  ⚠️ {risk}")
-    if obs:
-        for ob in obs[:3]:
-            lines.append(f"  ✅ {ob}")
-    if score >= 70:
-        lines.append(f"  📈 综合评估：买点条件较好，可考虑轻仓介入")
-    elif score >= 50:
-        lines.append(f"  📊 综合评估：买点条件一般，建议耐心等待更佳时机")
-    elif score >= 30:
-        lines.append(f"  📉 综合评估：买点条件不足，暂不推荐入场")
-    else:
-        lines.append(f"  🚫 综合评估：风险较高，不建议入场")
-
-    lines.append("")
-
-    # ── 龙头详情（表格下方） ──
-    if report.leader_details:
-        lines.append("  🐉 板块龙头详情")
-        lines.append("  " + "-" * 50)
-        lines.append(f"  {'名称':<10} {'近5日':>8}  {'今日盘中':>8}")
-        lines.append("  " + "-" * 50)
-        for d in report.leader_details:
-            g5   = f"{d['gain_5d']:+.2f}%" if d['gain_5d'] != 0 else "  --  "
-            gt   = f"{d['gain_today']:+.2f}%" if d['gain_today'] is not None else "  --  "
-            flag = "📈" if d['gain_today'] and d['gain_today'] > 0 else "📉"
-            lines.append(f"  {d['name']:<10} {g5:>8}  {flag} {gt:>8}")
-        lines.append("")
-
-    # ── 底部 ──
-    lines.append("  " + "─" * 50)
-    lines.append("  🔔 请到海通确认KD点后再做决策")
-    lines.append("  " + "─" * 50)
-
-    return "\n".join(lines)
-
 
 # ==================== CLI 入口 ====================
 
@@ -945,7 +802,8 @@ def main():
             import build_report as br
             print(br.build_report(report.to_dict()))
         elif args.format:
-            print(format_report(report))
+            import build_report as br
+            print(br.build_report(report.to_dict()))
         else:
             print(f"📊 {report.stock_name or report.stock_code}({report.stock_code}): "
                   f"{int(report.total_score)}分 {report.level}")
