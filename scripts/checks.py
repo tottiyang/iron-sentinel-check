@@ -152,7 +152,9 @@ def _calc_avg_volume(bars: List[Dict], n: int = 5) -> float:
 def check_macd(bars: List[Dict], realtime: Dict) -> CheckResult:
     """
     [1] MACD动能增强
-    通过条件：DIF > 0 且 DEA > 0 且 红柱增长 > 0（即MACD开口向上）
+    通过条件（二选一）：
+      (1) 红柱增长：bar_today > bar_yesterday
+      (2) 绿柱缩短：bar_today < 0 且 abs(bar_today) < abs(bar_yesterday)
     """
     if not bars or len(bars) < 34:
         return CheckResult(
@@ -168,20 +170,31 @@ def check_macd(bars: List[Dict], realtime: Dict) -> CheckResult:
                 "[数据不足] K线不足34根", False, "?",
             )
 
-        dif_t = dif_list[-1]
-        dea_t = dea_list[-1]
         bar_t = bar_list[-1]
         bar_y = bar_list[-2] if len(bar_list) >= 2 else bar_t - 0.1
+        dif_t = dif_list[-1]
+        dea_t = dea_list[-1]
 
-        passed = dif_t > 0 and dea_t > 0 and bar_t > bar_y
+        # 原始逻辑：红柱增长 OR 绿柱缩短
+        red_passed  = bar_t > 0 and bar_t > bar_y          # 红柱且增长
+        green_passed = bar_t < 0 and abs(bar_t) < abs(bar_y)  # 绿柱且缩短
+        passed = red_passed or green_passed
 
-        if passed:
-            reason = (f"DIF={dif_t:.4f} DEA={dea_t:.4f} | "
-                      f"红柱增长 {bar_t:.4f} > {bar_y:.4f}，趋势动能启动")
+        if red_passed:
+            reason = (f"红柱{bar_y:.4f}→{bar_t:.4f}（增长✅）"
+                      f"| DIF={dif_t:.4f} DEA={dea_t:.4f}")
+        elif green_passed:
+            reason = (f"绿柱{bar_y:.4f}→{bar_t:.4f}（缩短✅）"
+                      f"| DIF={dif_t:.4f} DEA={dea_t:.4f}")
         else:
-            reason = (f"DIF={dif_t:.4f} DEA={dea_t:.4f} | "
-                      f"红柱{bar_t:.4f} {'↑' if bar_t > bar_y else '↓'} "
-                      f"{'金叉' if bar_t > 0 else '未金叉'}")
+            if bar_t > 0:
+                direction = "增长❌" if bar_t <= bar_y else "增长✅"
+                reason = (f"红柱{bar_y:.4f}→{bar_t:.4f}（{direction}）"
+                          f"| DIF={dif_t:.4f} DEA={dea_t:.4f}")
+            else:
+                direction = "缩短❌" if abs(bar_t) >= abs(bar_y) else "缩短✅"
+                reason = (f"绿柱{bar_y:.4f}→{bar_t:.4f}（{direction}）"
+                          f"| DIF={dif_t:.4f} DEA={dea_t:.4f}")
 
         return CheckResult(1, NAMES[1], passed, _score(passed, WEIGHTS[1]),
                           {'dif': dif_t, 'dea': dea_t, 'bar': bar_t, 'bar_y': bar_y},
