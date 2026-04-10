@@ -8,9 +8,29 @@
 import json
 import sys
 import os
+import hashlib
 from typing import Dict, Any, Optional
 
-# 评分规则定义（与 checks.py 保持一致）
+# ═══════════════════════════════════════════════════════════════════════════════
+#  数据完整性校验（防止 JSON 被篡改）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _fingerprint(raw: Dict) -> str:
+    content = json.dumps({
+        'results':        raw.get('results', []),
+        'leader_details': raw.get('leader_details', []),
+    }, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(content.encode('utf-8')).hexdigest()[:16]
+
+def _verify(data: Dict) -> bool:
+    """验证 engine.py 原始数据是否被篡改"""
+    stored  = data.get('_data_hash', '')
+    current = _fingerprint(data)
+    return stored == current
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  评分规则定义（与 checks.py 保持一致）
+# ═══════════════════════════════════════════════════════════════════════════════
 WEIGHTS = {
     1: 8,   # MACD动能
     2: 8,   # 分时均价
@@ -56,6 +76,8 @@ def analyze_by_rules(data: Dict) -> Dict:
     纯规则引擎分析（不依赖 LLM API，纯本地执行）。
     与 checks.py 逻辑一致，保证评分一致。
     """
+    if not _verify(data):
+        raise ValueError("❌ 数据指纹校验失败：results / leader_details 被篡改，拒绝分析。")
     results = data.get("results", [])
     score = data.get("total_score", 0)
 
@@ -86,6 +108,8 @@ def analyze_by_llm(data: Dict, model: str = "glm-4", api_key: str = None) -> Dic
         model: 模型名称，如 "glm-4", "qwen-plus", "gpt-4"
         api_key: API 密钥，不传则使用环境变量
     """
+    if not _verify(data):
+        raise ValueError("❌ 数据指纹校验失败：results / leader_details 被篡改，拒绝分析。")
     # TODO: 实现 LLM API 调用
     # 目前回退到规则引擎
     print(f"[analyze] 模型 '{model}' 暂未实现，回退到规则引擎", file=sys.stderr)

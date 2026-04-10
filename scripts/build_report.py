@@ -8,8 +8,33 @@
 数据输入：analyze() 输出的分析结果（规则引擎或LLM）
 """
 
+import json
+import hashlib
 from typing import Dict, Any, Optional, List
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  数据完整性校验（防止展示层被篡改）
+# ═══════════════════════════════════════════════════════════════════════════
+_VERIFY_LOG = []  # 记录校验结果，供后续输出
+
+def _verify_fingerprint(data: Dict) -> bool:
+    """
+    验证 engine.py 原始数据是否被篡改。
+    严格锁定：results、leader_details 两个字段，任何层不得修改。
+    """
+    stored  = data.get('_data_hash', '')
+    content = json.dumps({
+        'results':        data.get('results', []),
+        'leader_details': data.get('leader_details', []),
+    }, ensure_ascii=False, sort_keys=True, default=str)
+    current = hashlib.sha256(content.encode('utf-8')).hexdigest()[:16]
+    ok = (stored == current)
+    _VERIFY_LOG.clear()
+    _VERIFY_LOG.append(('原始数据指纹', stored))
+    _VERIFY_LOG.append(('当前数据指纹', current))
+    _VERIFY_LOG.append(('校验结果', '✅ 未篡改' if ok else '❌ 被篡改'))
+    return ok
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  11项审核项中文名称（固定顺序）
@@ -75,6 +100,15 @@ def build_report(
     Returns:
         格式化报告字符串（固定表格格式）
     """
+    # ── 数据完整性校验（第一道关）────────────────────────────────
+    # ⚠️ engine.py 原始数据(results/leader_details)受 SHA256 指纹保护
+    # ⚠️ 任何层修改这两个字段将导致校验失败，拒绝生成报告
+    if not _verify_fingerprint(raw_data):
+        raise ValueError(
+            "❌ 数据指纹校验失败：results / leader_details 已被篡改。"
+            "请确保原始数据未被修改，直接使用 engine.py --json 的输出。"
+        )
+
     # 兼容：无 analysis 时自动用规则引擎生成
     if analysis is None:
         from analyze import analyze_by_rules
@@ -108,17 +142,24 @@ def _build(
     # 把 results 按 rule_num 索引
     by_num = {r.get("rule_num"): r for r in results}
 
+    # ── 数据完整性校验 ──────────────────────────────────────────
+    # ⚠️ 表格数据(results/leader_details)来自engine.py，任何层不得修改
+    # 此处校验指纹，若被篡改则拒绝生成报告
+    _verify_fingerprint(raw_data)
+    ok_verify = all(k for k, v in _VERIFY_LOG if '结果' in k)
+
     lines = []
 
     # ── 头部 ──
     code = raw_data.get("stock_code", "")
     name = raw_data.get("stock_name", "")
     ts   = raw_data.get("timestamp", "")
+    fp   = raw_data.get("_data_hash", "N/A")
     lines.append("")
     lines.append("  ╔══════════════════════════════════════════════════╗")
     lines.append(f"  ║  🩸 铁血哨兵 v2 · A股买点审核报告                ║")
     lines.append("  ╚══════════════════════════════════════════════════╝")
-    lines.append(f"  {code} {name}    {ts}")
+    lines.append(f"  {code} {name}    {ts}    数据指纹: {fp}")
     lines.append(DIVIDER)
 
     # ── 总评分 ──

@@ -15,6 +15,7 @@ import sys
 import os
 import re
 import json
+import hashlib
 import time
 import argparse
 from datetime import datetime
@@ -757,7 +758,29 @@ class AuditReport:
             'data_sources':      self.data_sources,
             'results':           [r.to_dict() for r in self.results],
             'leader_details':    self.leader_details,
+            '_data_hash':        self._fingerprint(self.results, self.leader_details),
         }
+
+    @staticmethod
+    def _fingerprint(results: List, leader_details: List) -> str:
+        """对原始审核数据(results+leader_details)生成SHA256指纹，防篡改"""
+        raw = {
+            'results':        [r.to_dict() for r in results],
+            'leader_details': leader_details,
+        }
+        content = json.dumps(raw, ensure_ascii=False, sort_keys=True, default=str)
+        return hashlib.sha256(content.encode('utf-8')).hexdigest()[:16]
+
+    @staticmethod
+    def verify(data: Dict) -> bool:
+        """验证JSON中results/leader_details是否被篡改"""
+        stored = data.get('_data_hash', '')
+        results_obj = [CheckResult(**{k: v for k, v in r.items()
+                                     if k in ['rule_num','rule_name','passed','score',
+                                              'raw_value','reason','available','source']})
+                      for r in data.get('results', [])]
+        current = AuditReport._fingerprint(results_obj, data.get('leader_details', []))
+        return stored == current
 
 
 # ==================== 报告格式化 ====================
