@@ -619,10 +619,12 @@ def check_sector_leaders(
 
     passed = dim1_pass and dim2_pass
 
-    # 打印详情供调试
+    # 打印龙头详情
+    idx = 0
     for ld in leader_details:
+        idx += 1
         today_str = f"{ld.get('gain_today', 0):+.2f}%" if ld.get('gain_today') is not None else "N/A"
-        print(f"    {ld.get('name', '')}: 今日{today_str} | 近5日{ld.get('gain_5d', 0):+.2f}%")
+        print(f"    {idx}. {ld.get('name', '')}: 今日{today_str} | 近5日{ld.get('gain_5d', 0):+.2f}%")
 
     print(f"    近5日: 正增{pos_5d}/5{'✅' if pos_5d>=3 else '❌'}, 高增>{high_5d}/5{'✅' if high_5d>=2 else '❌'}")
     print(f"    今日盘中: 正增{pos_today}/{len(valid_today)} {'✅' if dim2_pass else '❌'}")
