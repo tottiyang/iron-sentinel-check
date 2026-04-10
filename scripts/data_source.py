@@ -108,10 +108,21 @@ def query_neodata(query: str) -> Tuple[Optional[Dict], str, str]:
 
 
 def nd_extract_text(result: Optional[Dict], type_hint: str) -> str:
-    """从 NeoData 结果中提取指定类型的文本"""
+    """从 NeoData 结果中提取指定类型的文本
+    
+    数据路径（随API版本变化，两个都尝试）：
+      - v1: result['recall']
+      - v2: result['raw']['apiData']['apiRecall']
+    """
     if not result:
         return ""
+    # v1 路径（旧的）
     for item in result.get('recall', []):
+        if type_hint in item.get('type', ''):
+            return item.get('content', '')
+    # v2 路径（当前有效）
+    api_data = result.get('raw', {}).get('apiData', {})
+    for item in api_data.get('apiRecall', []):
         if type_hint in item.get('type', ''):
             return item.get('content', '')
     return ""
@@ -307,26 +318,32 @@ def get_realtime_akshare(code: str) -> Tuple[Optional[Dict], str, str]:
 
 @_retry(max_attempts=2, base_delay=0.5)
 def get_daily_bars_sina(code: str, count: int = 80) -> Tuple[Optional[List[Dict]], str, str]:
-    """新浪财经日K线（240分钟=日线，备用数据源）"""
+    """新浪财经日K线（240分钟=日线，备用数据源）
+    注意：新浪K线 volume 单位为"股"，需要 /100 转为"手"（1手=100股）
+    """
     try:
+        import requests as _req
         market, num = _market_code(code)
         # 新浪 symbol 格式: sz300438
         symbol = f"{market}{num}"
         url = "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData"
         params = {'symbol': symbol, 'scale': 240, 'ma': 'no', 'datalen': count}
-        r = _SESSION.get(url, params=params, timeout=10)
+        r = _req.get(url, params=params, timeout=10)
         data = r.json()
         if not data or not isinstance(data, list):
             return None, "sina", "新浪日K线为空"
         bars = []
         for item in data:
+            # 新浪 volume 单位是"股"，除以100转为"手"以保持与其他数据源一致
+            vol_raw = _to_float(item.get('volume'))
+            vol_hand = vol_raw / 100.0 if vol_raw else 0.0
             bars.append({
                 'date': str(item.get('day', '')),
                 'open': _to_float(item.get('open')),
                 'high': _to_float(item.get('high')),
                 'low': _to_float(item.get('low')),
                 'close': _to_float(item.get('close')),
-                'vol': _to_float(item.get('volume')),
+                'vol': vol_hand,   # 统一为"手"
             })
         return bars, "sina", ""
     except Exception as e:
@@ -549,3 +566,116 @@ def _normalize_code(raw_code: str) -> str:
 def clear_cache() -> None:
     """清除 NeoData 查询缓存（每次审核开始时调用）"""
     _ND_CACHE.clear()
+
+
+# ==================== NeoData 今日实时行情提取 ====================
+
+def nd_extract_quote(result: Optional[Dict]) -> Optional[Dict]:
+    """
+    从 NeoData 结果中提取A股实时行情数据。
+    正确路径: raw.apiData.apiRecall（不是 entity 层）
+
+    Returns:
+        {
+            'price': float,     # 最新价格（元）
+            'chg': float,       # 涨跌幅（%，正数=涨）
+            'open': float,      # 开盘价
+            'high': float,      # 最高价
+            'low': float,       # 最低价
+            'prev_close': float, # 昨日收盘
+            'vol': float,       # 成交量（手）
+            'amount': float,    # 成交额（万元）
+            'turnover': float,  # 换手率（%）
+            'pe': float,        # 市盈率TTM
+            'pb': float,        # 市净率
+            'mkt_cap': float,   # 总市值（亿元）
+            'chg5d': float,     # 近5日涨跌幅（%）
+            'chg20d': float,    # 近20日涨跌幅（%）
+            'update_time': str, # 更新时间
+            'raw': str,         # 原始文本
+        }
+        或 None（提取失败）
+    """
+    if not result:
+        return None
+    import re
+    raw = result.get('raw', {})
+    api_data = raw.get('apiData', {})
+    recalls = api_data.get('apiRecall', [])
+    
+    content = ''
+    for r in recalls:
+        c = r.get('content', '')
+        if '最新价格' in c and '涨跌幅' in c and 'A股' in c:
+            content = c
+            break
+    if not content:
+        # 降级：只要有价格和涨跌幅即可
+        for r in recalls:
+            c = r.get('content', '')
+            if '最新价格' in c and '涨跌幅' in c and ('元' in c or '美元' in c):
+                # 排除纯美股数据
+                if 'A股' not in c and 'sh6' not in c and 'sz0' not in c and 'sz3' not in c:
+                    continue
+                content = c
+                break
+    
+    if not content:
+        return None
+
+    def f(pat, default=None):
+        m = re.search(pat, content)
+        if m:
+            val = m.group(1).replace(',', '').replace('%', '').strip()
+            try:
+                return float(val)
+            except ValueError:
+                return val
+        return default
+
+    # 提取更新时间
+    time_m = re.search(r'数据更新时间[:：]\s*(\d{4}[/\-]\d{2}[/\-]\d{2}\s+\d{2}:\d{2}:\d{2})', content)
+    update_time = time_m.group(1) if time_m else ''
+
+    return {
+        'price':      f(r'最新价格[:：]\s*([-\d.]+)'),
+        'chg':        f(r'涨跌幅[:：]\s*([-\d.]+)'),
+        'open':       f(r'今日开盘价格[:：]\s*([-\d.]+)'),
+        'high':       f(r'最高价[:：]\s*([-\d.]+)'),
+        'low':        f(r'最低价[:：]\s*([-\d.]+)'),
+        'prev_close': f(r'昨日收盘价格[:：]\s*([-\d.]+)'),
+        'vol':        f(r'成交数量[(（](?:手|股)[)）][:：]\s*([-\d,.]+)'),
+        'amount':     f(r'成交金额[(（](?:万元|元|万)[)）][:：]\s*([-\d,.]+)'),
+        'turnover':   f(r'换手率[:：]\s*([-\d.]+)'),
+        'pe':         f(r'市盈率[(（]TTM[)）][:：]\s*([-\d.]+)'),
+        'pb':         f(r'市净率[:：]\s*([-\d.]+)'),
+        'mkt_cap':    f(r'总市值[(（]亿元[)）][:：]\s*([-\d.]+)'),
+        'chg5d':      f(r'5日涨跌幅[:：]\s*([-\d.]+)'),
+        'chg20d':     f(r'20日涨跌幅[:：]\s*([-\d.]+)'),
+        'update_time': update_time,
+        'raw':        content,
+    }
+
+
+def get_realtime_neodata(code: str) -> Tuple[Optional[Dict], str, str]:
+    """
+    通过 NeoData 获取个股今日实时行情。
+    替代腾讯API（腾讯今日数据被屏蔽）。
+
+    Returns: (quote_dict, source, error_msg)
+    """
+    # 构造查询语句：同时查询数字代码和名称，提升命中率
+    name_map = {
+        '300438': '鹏辉能源', '300750': '宁德时代', '300274': '阳光电源',
+        '300014': '亿纬锂能', '002460': '赣锋锂业', '002050': '三花智控',
+        '600519': '贵州茅台', '000858': '五粮液',
+    }
+    name = name_map.get(code.upper().replace('SZ', '').replace('SH', ''), code)
+    query = f"{name} {code} 今日最新行情：最新价格、涨跌幅、开盘价、最高价、最低价、昨日收盘、成交量、成交额、换手率、市盈率、市净率、总市值、近5日涨跌幅、近20日涨跌幅"
+    result, src, err = query_neodata(query)
+    if err or not result:
+        return None, "neodata", err or "查询无结果"
+    quote = nd_extract_quote(result)
+    if not quote or quote.get('price') is None:
+        return None, "neodata", "行情提取失败"
+    return quote, "neodata", ""

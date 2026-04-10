@@ -26,8 +26,8 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from data_source import (
-    query_neodata, nd_extract_text, nd_extract_number,
-    get_realtime_tencent, get_daily_bars_tencent,
+    query_neodata, nd_extract_text, nd_extract_number, nd_extract_quote,
+    get_realtime_tencent, get_realtime_neodata, get_daily_bars_tencent,
     get_daily_bars_sina,  # 新浪备用日K线（腾讯API今日被屏蔽）
     get_index_tencent, get_index_bars_tencent,
     get_money_flow_akshare, get_financial_akshare,
@@ -100,8 +100,71 @@ class IronSentinelEngine:
             self.data_sources['quote'] = "none"
             print(f"  [行情] ❌ {err[:50] if err else '行情获取失败'}")
 
+    def _fetch_realtime_quote(self) -> None:
+        """获取今日实时行情（NeoData优先 → 腾讯备用），
+        结果存入 self._raw['realtime_quote']，
+        同时将今日数据注入 bars[-1]，确保 MACD/量能计算包含今天。
+        """
+        # NeoData 优先
+        quote, src, err = get_realtime_neodata(self.stock_code)
+        
+        # 腾讯备用（腾讯被屏蔽时可能返回 None）
+        if not quote:
+            qt, qt_src, qt_err = get_realtime_tencent(self.stock_code)
+            if qt and not qt_err:
+                quote = {
+                    'price': qt.get('price'),
+                    'chg': qt.get('pct_chg'),
+                    'open': qt.get('open'),
+                    'high': qt.get('high'),
+                    'low': qt.get('low'),
+                    'prev_close': qt.get('prev_close'),
+                    'vol': qt.get('vol') if qt.get('vol') else qt.get('volumn'),
+                    'amount': qt.get('amount'),
+                    'turnover': qt.get('turnover_rate'),
+                    'pe': qt.get('pe'),
+                    'pb': qt.get('pb'),
+                    'mkt_cap': qt.get('market_cap'),
+                }
+                src = qt_src
+
+        if quote and quote.get('price') is not None:
+            self._raw['realtime_quote'] = quote
+            self.data_sources['realtime_quote'] = src
+            price = quote.get('price', '?')
+            chg = quote.get('chg', 0) or 0
+            upd = quote.get('update_time', '')
+            print(f"  [实时] ✅ {src}（价={price} {chg:+.2f}%）")
+        else:
+            self.data_sources['realtime_quote'] = "none"
+            print(f"  [实时] ⚠️ 今日实时行情不可用（{err or ''}）")
+
+    def _inject_today_into_bars(self) -> None:
+        """将今日实时数据注入 bars[-1]，使 MACD/量能计算包含今天"""
+        bars = self._raw.get('daily_bars', [])
+        quote = self._raw.get('realtime_quote', {})
+        if not bars or not quote or quote.get('price') is None:
+            return
+
+        today_date = datetime.now().strftime('%Y-%m-%d')
+        # 用实时数据覆盖 bars[-1] 的收盘/开高低/成交量
+        bars[-1] = {
+            'date':   today_date,
+            'open':   quote.get('open') or quote.get('prev_close') or bars[-1].get('open'),
+            'high':   quote.get('high') or bars[-1].get('high'),
+            'low':    quote.get('low')  or bars[-1].get('low'),
+            'close':  quote.get('price'),
+            'vol':    quote.get('vol')   or bars[-1].get('vol'),
+            'amount': quote.get('amount') or bars[-1].get('amount'),
+            'is_today': True,  # 标记这是今日实时数据
+        }
+        # 标记数据来源
+        rt_src = self.data_sources.get('realtime_quote', '')
+        if rt_src and rt_src != 'none':
+            self.data_sources['daily_bars'] = f"{self.data_sources.get('daily_bars','?')}+{rt_src}(今日)"
+
     def _fetch_daily_bars(self) -> None:
-        """获取日K线（新浪优先 → 腾讯备用 → akshare降级）"""
+        """获取日K线（新浪优先 → 腾讯备用 → akshare降级），获取后注入今日实时数据"""
         bars, src, err = get_daily_bars_sina(self.stock_code, count=80)
         if err or not bars:
             bars, src, err = get_daily_bars_tencent(self.stock_code, count=60)
@@ -112,6 +175,9 @@ class IronSentinelEngine:
             self._raw['daily_bars'] = bars
             self.data_sources['daily_bars'] = src
             print(f"  [K线] ✅ {src} ({len(bars)}根)")
+            # 注入今日实时数据（使 MACD/量能包含今天）
+            self._fetch_realtime_quote()
+            self._inject_today_into_bars()
         else:
             self.data_sources['daily_bars'] = "none"
             print(f"  [K线] ❌ {err[:50]}")
@@ -121,24 +187,46 @@ class IronSentinelEngine:
         flow = None
         src = "none"
 
-        # 优先 NeoData
+        # 优先 NeoData（同时搜索两种可能的type_hint）
         try:
             result, _, err = query_neodata(
                 f"查询{self.stock_code}主力资金流向、超大单净流入、大单净流入、中单净流入、小单净流入"
             )
             if not err and result:
-                txt = nd_extract_text(result, "资金流向与龙虎榜")
-                if txt:
-                    # 提取各档位净流入（单位：万）
-                    def extract_flow(pattern, text):
-                        m = re.search(pattern, text)
-                        return float(m.group(1)) * 10000 if m else None
+                # 尝试多种type_hint（NeoData版本不同返回不同）
+                for hint in ["今日资金流向", "资金流向与龙虎榜", "资金流向"]:
+                    txt = nd_extract_text(result, hint)
+                    if txt and '净流入' in txt:
+                        break
 
-                    super_net  = extract_flow(r'超大单净流入[:：]\s*([-\d.]+)', txt)
-                    big_net    = extract_flow(r'大单净流入[:：]\s*([-\d.]+)', txt)
-                    mid_net    = extract_flow(r'中单净流入[:：]\s*([-\d.]+)', txt)
-                    small_net  = extract_flow(r'小单净流入[:：]\s*([-\d.]+)', txt)
-                    main_net   = extract_flow(r'主力净流入[:：]\s*([-\d.]+)', txt)
+                if txt and '净流入' in txt:
+                    # 提取各档位净流入（NeoData返回单位为"元"，需转换）
+                    def extract_net(keyword, text):
+                        """匹配 关键词 数字 元/万/亿，返回元为单位的数值"""
+                        # NeoData 主要返回"元"单位
+                        patterns = [
+                            rf'{re.escape(keyword)}[:：]?\s*([-\d,]+\.?\d*)\s*元',
+                            rf'{re.escape(keyword)}[:：]?\s*([-\d,]+\.?\d*)\s*万',
+                            rf'{re.escape(keyword)}[:：]?\s*([-\d,]+\.?\d*)\s*亿',
+                            rf'{re.escape(keyword)}[:：]?\s*([-\d,]+\.?\d*)',
+                        ]
+                        for pat in patterns:
+                            m = re.search(pat, text)
+                            if m:
+                                val = float(m.group(1).replace(',', ''))
+                                if '万' in pat and '亿' not in pat: val *= 10000
+                                elif '亿' in pat: val *= 100000000
+                                return val
+                        return None
+
+                    # NeoData 返回格式举例：
+                    #   主力净流入-49906995元（净流出为负）
+                    #   超大单流入-12746730元（大单流出为负，关键词不含"净"）
+                    super_net  = extract_net('超大单净流入', txt) or extract_net('超大单流入', txt)
+                    big_net    = extract_net('大单净流入', txt) or extract_net('大单流入', txt)
+                    mid_net    = extract_net('中单净流入', txt) or extract_net('中单流入', txt)
+                    small_net  = extract_net('小单净流入', txt) or extract_net('小单流入', txt)
+                    main_net   = extract_net('主力净流入', txt) or extract_net('主力净流入', txt)
 
                     if any(v is not None for v in [super_net, big_net, main_net]):
                         flow = {
@@ -175,29 +263,51 @@ class IronSentinelEngine:
         fin = None
         src = "none"
 
-        # NeoData 优先
+        # NeoData 优先（尝试多个type_hint）
         try:
             result, _, err = query_neodata(
                 f"查询{self.stock_code}市盈率PE、市净率PB、净资产收益率ROE、每股收益、营业总收入、净利润"
             )
             if not err and result:
-                txt = nd_extract_text(result, "财务指标")
-                if txt:
+                # 尝试多个可能的 type_hint
+                txt = ""
+                for hint in ["基本面", "估值数据与基本面分析", "财务指标", "估值"]:
+                    t = nd_extract_text(result, hint)
+                    if t and ('市盈' in t or '市净' in t):
+                        txt = t
+                        break
+
+                if txt and ('市盈' in txt or '市净' in txt):
                     def extract_num(pat, text):
                         m = re.search(pat, text)
-                        return float(m.group(1)) if m else None
+                        if m:
+                            try: return float(m.group(1))
+                            except: return None
+                        return None
 
-                    pe   = extract_num(r'市盈率\(PE\)[^0-9]*([-\d.]+)', txt)
-                    pb   = extract_num(r'市净率\(PB\)[^0-9]*([-\d.]+)', txt)
-                    roe  = extract_num(r'净资产收益率[^0-9]*([-\d.]+)', txt)
-                    eps  = extract_num(r'每股收益[^0-9]*([-\d.]+)', txt)
-                    rev  = extract_num(r'营业总收入[^0-9]*([-\d.]+)', txt)
-                    prof = extract_num(r'净利润[^0-9]*([-\d.]+)', txt)
+                    # 市盈率：支持"市盈TTM为负值"、"市盈率(PE)"、"市盈TTM为"等
+                    pe_raw = None
+                    if '为负值' in txt or '为负' in txt:
+                        pe_raw = None  # 亏损股PE无意义
+                    else:
+                        for pat in [
+                            r'市盈TTM[^0-9\uff1a:]*([-\d.]+)',
+                            r'市盈率\(PE\)[^0-9\uff1a:]*([-\d.]+)',
+                            r'市盈率[^0-9\uff1a:]*([-\d.]+)',
+                        ]:
+                            v = extract_num(pat, txt)
+                            if v is not None:
+                                pe_raw = v
+                                break
 
-                    if any(v is not None for v in [pe, pb, roe, eps]):
+                    pb = extract_num(r'市净率[^0-9\uff1a:]*([-\d.]+)', txt)
+                    roe  = extract_num(r'净资产收益率TTM[^0-9\uff1a:]*([-\d.]+)', txt)
+                    eps  = extract_num(r'每股收益[^0-9\uff1a:]*([-\d.]+)', txt)
+
+                    if any(v is not None for v in [pe_raw, pb, roe, eps]):
                         fin = {
-                            'pe': pe, 'pb': pb, 'roe': roe,
-                            'eps': eps, 'revenue': rev, 'profit': prof,
+                            'pe': pe_raw, 'pb': pb, 'roe': roe,
+                            'eps': eps,
                         }
                         src = "neodata"
         except Exception:
