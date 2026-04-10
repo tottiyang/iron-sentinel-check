@@ -654,8 +654,9 @@ def format_report(report: AuditReport) -> str:
     lines.append("║" + f"  审核时间：{report.timestamp}".ljust(W - 2) + "║")
     lines.append("╚" + "═" * (W - 2) + "╝")
 
-    # ── 评分（合并建议） ──
-    lines.append(f"\n  {int(report.total_score)}/100  {report.level}  |  {report.suggestion}")
+    # ── 评分 ──
+    lines.append(f"  评分 {int(report.total_score)}/100  {report.level}")
+    lines.append(f"  建议  {report.suggestion}")
 
     # ── 11项审核（按顺序，无分组标题） ──
     lines.append("")
@@ -771,7 +772,9 @@ def format_report(report: AuditReport) -> str:
     lines.append("")
 
     # ── 底部 ──
-    lines.append("    ⚠️  请到海通确认KD点后再做决策  ⚠️")
+    lines.append("  " + "─" * 50)
+    lines.append("  🔔 请到海通确认KD点后再做决策")
+    lines.append("  " + "─" * 50)
 
     return "\n".join(lines)
 
