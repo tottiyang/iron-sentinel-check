@@ -9,6 +9,7 @@
 """
 
 import json
+import re
 import hashlib
 from typing import Dict, Any, Optional, List
 
@@ -168,26 +169,28 @@ def _build(
     lines.append(f"  结论       {conclusion}")
     lines.append(DIVIDER)
 
-    # ── 11项审核明细 ──
+    # ── 11项审核明细（直接用 results 动态渲染，不依赖 ITEMS 硬编码标签） ──
     lines.append("  审核明细")
-    lines.append(f"  {'#':<2}  {'审核项':<14} {'状态':>5}  {'得分':>4}  {'详情摘要'}")
-    lines.append("  " + "-" * 54)
-    for num, name_text, weight in ITEMS:
-        r = by_num.get(num)
-        if r is None:
-            icon  = "⚪"
-            avbl  = False
-            sc    = 0
-            detail = "（未审核）"
-        else:
-            icon  = _rule_icon(r.get("passed"), r.get("available"))
-            avbl  = r.get("available", True)
-            sc    = weight if r.get("passed") else 0
-            detail = r.get("reason", "")[:22]
+    lines.append(f"  {'#':<2}  {'审核项':<16} {'状态':>5}  {'得分':>5}  {'详情摘要'}")
+    lines.append("  " + "-" * 56)
+    for r in results:
+        num       = r.get("rule_num", 0)
+        name_text = r.get("rule_name", "?")
+        # 权重从 ITEMS 权威表查，避免数据里 score 不一致
+        weight    = next((w for n, _, w in ITEMS if n == num), 0)
+        icon      = _rule_icon(r.get("passed"), r.get("available"))
+        avbl      = r.get("available", True)
+        sc        = weight if r.get("passed") else 0
+        score_str = f"{sc:>4}/{weight}"
 
         if not avbl:
-            detail = "⚠️ 数据不可用"
-        lines.append(f"  {num:<2}  {name_text:<14} {icon} {sc:>4}/{weight}  {detail}")
+            lines.append(f"  {num:<2}  {name_text:<16} {icon} {score_str}  ⚠️ 数据不可用")
+        else:
+            raw_detail = re.sub(r'（数据源[:：][^）]+）', '', r.get("reason", "")).strip()
+            lines.append(f"  {num:<2}  {name_text:<16} {icon} {score_str}  {raw_detail[:46]}")
+            if len(raw_detail) > 46:
+                for i in range(46, len(raw_detail), 46):
+                    lines.append(f"  {' ':<2}  {' ':<16} {' ':>5}  {' ':>5}  {raw_detail[i:i+46]}")
 
     lines.append(DIVIDER)
 
