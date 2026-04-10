@@ -54,13 +54,12 @@ class IronSentinelEngine:
       优先: NeoData → 备用: 腾讯/新浪 → 降级: akshare
     """
 
-    def __init__(self, stock_code: str):
+    def __init__(self, stock_code: str, quiet: bool = False):
         self.stock_code = _normalize_code(stock_code)
         self.stock_name = ""
+        self._quiet = quiet
         self.results: Dict[str, CheckResult] = {}
         self.data_sources: Dict[str, str] = {}
-
-        # 原始数据缓存（供审核函数使用）
         self._raw: Dict[str, Any] = {}
 
     # ---- 数据获取阶段 ----
@@ -551,7 +550,7 @@ class IronSentinelEngine:
 
     def _audit(self) -> List[CheckResult]:
         """执行全部11项审核"""
-        print("\n🔍 审核中...")
+        if not self._quiet: print("\n🔍 审核中...")
 
         bars       = self._raw.get('daily_bars', [])
         quote      = self._raw.get('quote')
@@ -675,32 +674,42 @@ class IronSentinelEngine:
             print(report.suggestion)          # "良好买点，可以考虑买入"
             print(report.to_dict())            # 完整结果（JSON）
         """
-        clear_cache()
+        import io
+        _orig_stdout = sys.stdout
+        if self._quiet:
+            sys.stdout = io.StringIO()
 
-        if not self._fetch_all():
-            print("\n⚠️ 数据不足，无法完成审核")
+        try:
+            clear_cache()
 
-        results, leader_details = self._audit()
+            if not self._fetch_all():
+                print("\n⚠️ 数据不足，无法完成审核")
 
-        total_score = sum(r.score for r in results)
-        passed      = sum(1 for r in results if r.passed)
-        failed      = sum(1 for r in results if not r.passed and r.available)
-        unavailable = sum(1 for r in results if not r.available)
+            results, leader_details = self._audit()
 
-        return AuditReport(
-            stock_code=self.stock_code,
-            stock_name=self.stock_name,
-            total_score=total_score,
-            passed_count=passed,
-            failed_count=failed,
-            unavailable_count=unavailable,
-            results=results,
-            suggestion=get_suggestion(total_score),
-            level=get_level(total_score),
-            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            data_sources=self.data_sources,
-            leader_details=leader_details,
-        )
+            total_score = sum(r.score for r in results)
+            passed      = sum(1 for r in results if r.passed)
+            failed      = sum(1 for r in results if not r.passed and r.available)
+            unavailable = sum(1 for r in results if not r.available)
+
+            report = AuditReport(
+                stock_code=self.stock_code,
+                stock_name=self.stock_name,
+                total_score=total_score,
+                passed_count=passed,
+                failed_count=failed,
+                unavailable_count=unavailable,
+                results=results,
+                suggestion=get_suggestion(total_score),
+                level=get_level(total_score),
+                timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                data_sources=self.data_sources,
+                leader_details=leader_details,
+            )
+        finally:
+            sys.stdout = _orig_stdout
+
+        return report
 
 
 # ==================== 报告类 ====================
@@ -747,6 +756,7 @@ class AuditReport:
             'timestamp':         self.timestamp,
             'data_sources':      self.data_sources,
             'results':           [r.to_dict() for r in self.results],
+            'leader_details':    self.leader_details,
         }
 
 
@@ -903,14 +913,18 @@ def format_report(report: AuditReport) -> str:
 def main():
     p = argparse.ArgumentParser(description="铁血哨兵 v2 - A股买点审核引擎")
     p.add_argument('stock_code', help='股票代码，如 300438 或 sz300438')
-    p.add_argument('--json',   action='store_true', help='JSON输出')
-    p.add_argument('--format',  action='store_true', help='完整格式化报告')
+    p.add_argument('--json',   action='store_true', help='JSON输出（干净，无进度）')
+    p.add_argument('--format',  action='store_true', help='完整格式化报告（旧版）')
+    p.add_argument('--report',  action='store_true', help='完整三段式报告（新标准输出）')
     args = p.parse_args()
 
     try:
-        report = IronSentinelEngine(args.stock_code).audit()
+        report = IronSentinelEngine(args.stock_code, quiet=args.json or args.report).audit()
         if args.json:
             print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+        elif args.report:
+            import build_report as br
+            print(br.build_report(report.to_dict()))
         elif args.format:
             print(format_report(report))
         else:
