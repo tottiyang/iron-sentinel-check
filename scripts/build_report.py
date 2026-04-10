@@ -156,9 +156,7 @@ def _build(
     ts   = raw_data.get("timestamp", "")
     fp   = raw_data.get("_data_hash", "N/A")
     lines.append("")
-    lines.append("  ╔══════════════════════════════════════════════════╗")
-    lines.append(f"  ║  🩸 铁血哨兵 v2 · A股买点审核报告                ║")
-    lines.append("  ╚══════════════════════════════════════════════════╝")
+    lines.append(f"  🩸 铁血哨兵 v2 · A股买点审核报告")
     lines.append(f"  {code} {name}    {ts}    数据指纹: {fp}")
     lines.append(DIVIDER)
 
