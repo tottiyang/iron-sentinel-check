@@ -264,6 +264,7 @@ def check_macd(bars: List[Dict], realtime: Dict) -> CheckResult:
 def check_volume(bars: List[Dict], realtime: Dict) -> CheckResult:
     """
     [2] 量能放大
+    非交易日：跳过，返回 unavailable
     盘中（当前时间 < 15:00 且 bars[-1] 有实时数据）:
         估算全天量 = 今日盘中累计量 / passed_weight(now)
         通过条件: 估算全天量 > 近5日均量 × 1.1
@@ -278,10 +279,18 @@ def check_volume(bars: List[Dict], realtime: Dict) -> CheckResult:
 
     try:
         now = datetime.now()
+        # ── 交易日判断 ──
+        if now.weekday() >= 5:
+            return CheckResult(
+                2, NAMES[2], False, 0.0, None,
+                f"[非交易日] 今日为周{['一','二','三','四','五','六','日'][now.weekday()]}，跳过量能审核", False, "none",
+            )
+
         market_close = now.replace(hour=15, minute=0, second=0, microsecond=0)
         today_vol_raw = _safe_float(bars[-1].get('vol', 0))
         yesterday_vol = _safe_float(bars[-2].get('vol', 0))
-        # 均量基准：用昨日往前5天（不含今日）作为历史均量，避免今日部分量拉低基数
+
+        # 均量基准：用昨日往前5天（不含今日）作为历史均量
         hist_bars = bars[-6:-1]  # 不含今日和昨日，共5天
         hist_vol_avg = sum(_safe_float(b.get('vol', 0)) for b in hist_bars) / max(len(hist_bars), 1)
         prev_vol = _safe_float(bars[-2].get('vol', 0))  # 昨日全天量
@@ -291,25 +300,22 @@ def check_volume(bars: List[Dict], realtime: Dict) -> CheckResult:
         passed_w = _calc_passed_weight(now)
 
         if is_live and passed_w >= 0.05:
-            # 盘中模式：估算全天量，与历史均量（不含今日）和昨日量双重对比
+            # 盘中模式：估算全天量
             estimated_full = today_vol_raw / passed_w
             ratio_vs_avg = estimated_full / hist_vol_avg if hist_vol_avg > 0 else 0
             ratio_vs_yesterday = estimated_full / prev_vol if prev_vol > 0 else 0
             # 通过条件：估算全天 > 历史均量 × 1.1
             passed = ratio_vs_avg > 1.1
-            reason = (f"盘中{passed_w:.0%}已过："
-                      f"累计{_fmt_vol(today_vol_raw)}手 ÷ {passed_w:.0%} "
-                      f"= 估全天{_fmt_vol(estimated_full)}手 "
-                      f"{'✅' if passed else '❌'} 历史均量×1.1={_fmt_vol(hist_vol_avg*1.1)}手"
-                      f"，比值{ratio_vs_avg:.2f}×（vs昨日{ratio_vs_yesterday:.2f}×）")
+            reason = (f"盘中{passed_w:.0%}已过：估全天{_fmt_vol(estimated_full)}手 "
+                      f"{'✅' if passed else '❌'} 近5日均量{_fmt_vol(hist_vol_avg)}手 "
+                      f"（vs昨日{_fmt_vol(prev_vol)}手，比值{ratio_vs_avg:.2f}×）")
         else:
             # 盘后模式
             ratio_vs_avg = today_vol_raw / hist_vol_avg if hist_vol_avg > 0 else 0
             passed = ratio_vs_avg > 1.1
-            method_tag = "盘中权重<5%" if is_live else "盘后"
-            reason = (f"{method_tag}：全天{_fmt_vol(today_vol_raw)}手 "
-                      f"{'✅' if passed else '❌'} 历史均量×1.1={_fmt_vol(hist_vol_avg*1.1)}手"
-                      f"，比值{ratio_vs_avg:.2f}×（vs昨日{today_vol_raw/prev_vol:.2f}×）")
+            reason = (f"全天{_fmt_vol(today_vol_raw)}手 "
+                      f"{'✅' if passed else '❌'} 近5日均量{_fmt_vol(hist_vol_avg)}手 "
+                      f"（vs昨日{_fmt_vol(prev_vol)}手，比值{ratio_vs_avg:.2f}×）")
 
         return CheckResult(
             2, NAMES[2], passed, _score(passed, WEIGHTS[2]),

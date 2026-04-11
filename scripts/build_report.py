@@ -9,7 +9,6 @@
 """
 
 import json
-import re
 import hashlib
 from typing import Dict, Any, Optional, List
 
@@ -41,17 +40,17 @@ def _verify_fingerprint(data: Dict) -> bool:
 #  11项审核项中文名称（固定顺序）
 # ═══════════════════════════════════════════════════════════════════════════
 ITEMS = [
-    (1,  "MACD动能增强",  8),
-    (2,  "分时均线上方",  8),
-    (3,  "量能放大",      8),
-    (4,  "上升趋势",      8),
-    (5,  "主力净流入",    10),
-    (6,  "基本面良好",    10),
-    (7,  "大盘日内非下行", 8),
-    (8,  "大盘趋势非下行", 8),
-    (9,  "板块趋势向上",   8),
-    (10, "龙头活跃(双维)", 12),
-    (11, "筹码集中度",    12),
+    (1,  "MACD动能增强",    8),
+    (2,  "量能放大",        8),
+    (3,  "主力净流入",      8),
+    (4,  "上升趋势",        8),
+    (5,  "基本面良好",      10),
+    (6,  "分时均线上方",    10),
+    (7,  "大盘日内非下行",   8),
+    (8,  "大盘趋势非下行",   8),
+    (9,  "板块趋势向上",     8),
+    (10, "龙头活跃",        12),
+    (11, "筹码集中度",      12),
 ]
 MAX_SCORE = sum(s for _, _, s in ITEMS)  # 92
 
@@ -171,26 +170,26 @@ def _build(
 
     # ── 11项审核明细（直接用 results 动态渲染，不依赖 ITEMS 硬编码标签） ──
     lines.append("  审核明细")
-    lines.append(f"  {'#':<2}  {'审核项':<16} {'状态':>5}  {'得分':>5}  {'详情摘要'}")
+    lines.append(f"  {'#':<2}  {'审核项':<16} {'状态':^7}  详情摘要")
     lines.append("  " + "-" * 56)
     for r in results:
         num       = r.get("rule_num", 0)
         name_text = r.get("rule_name", "?")
-        # 权重从 ITEMS 权威表查，避免数据里 score 不一致
-        weight    = next((w for n, _, w in ITEMS if n == num), 0)
         icon      = _rule_icon(r.get("passed"), r.get("available"))
         avbl      = r.get("available", True)
-        sc        = weight if r.get("passed") else 0
-        score_str = f"{sc:>4}/{weight}"
 
         if not avbl:
-            lines.append(f"  {num:<2}  {name_text:<16} {icon} {score_str}  ⚠️ 数据不可用")
+            lines.append(f"  {num:<2}  {name_text:<16} {icon:^7}  ⚠️ 数据不可用")
         else:
-            raw_detail = re.sub(r'（数据源[:：][^）]+）', '', r.get("reason", "")).strip()
-            lines.append(f"  {num:<2}  {name_text:<16} {icon} {score_str}  {raw_detail[:46]}")
-            if len(raw_detail) > 46:
-                for i in range(46, len(raw_detail), 46):
-                    lines.append(f"  {' ':<2}  {' ':<16} {' ':>5}  {' ':>5}  {raw_detail[i:i+46]}")
+            # 原始 reason 完整保留，不做任何截断或清洗
+            raw_detail = r.get("reason", "无详情")
+            # 第一行：截取合理长度
+            lines.append(f"  {num:<2}  {name_text:<16} {icon:^7}  {raw_detail[:44]}")
+            # 超长内容换行（缩进对齐）
+            if len(raw_detail) > 44:
+                indent = "  " + " " * 20 + "  "  # 对齐详情列
+                for i in range(44, len(raw_detail), 44):
+                    lines.append(indent + raw_detail[i:i+44])
 
     lines.append(DIVIDER)
 
