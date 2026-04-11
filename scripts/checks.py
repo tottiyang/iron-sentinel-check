@@ -307,11 +307,8 @@ def check_volume(bars: List[Dict], realtime: Dict) -> CheckResult:
         is_live = bars[-1].get('is_today') is True and now < market_close
         passed_w = _calc_passed_weight(now)
 
-        # 非交易日提示（now.weekday() 是实际当前时间，非 effective）
-        real_now = datetime.now()
-        is_weekend = real_now.weekday() >= 5
-        day_tag = f"[周{['一','二','三','四','五','六','日'][real_now.weekday()]}末·用{real_now.strftime('%m/%d')}最后交易日数据] " if is_weekend else ""
-
+        # 非交易日：now 已退为 16:00，直接用 bars[-1]（最后交易日）数据
+        # 仅在 reason 中体现，不加标签
         if is_live and passed_w >= 0.05:
             # 盘中模式：估算全天量
             estimated_full = today_vol_raw / passed_w
@@ -319,15 +316,14 @@ def check_volume(bars: List[Dict], realtime: Dict) -> CheckResult:
             ratio_vs_yesterday = estimated_full / prev_vol if prev_vol > 0 else 0
             # 通过条件：估算全天 > 历史均量 × 1.1
             passed = ratio_vs_avg > 1.1
-            reason = (f"{day_tag}盘中{passed_w:.0%}已过：估全天{_fmt_vol(estimated_full)}手 "
+            reason = (f"盘中{passed_w:.0%}已过：估全天{_fmt_vol(estimated_full)}手 "
                       f"{'✅' if passed else '❌'} 近5日均量{_fmt_vol(hist_vol_avg)}手 "
                       f"（vs昨日{_fmt_vol(prev_vol)}手，比值{ratio_vs_avg:.2f}×）")
         else:
-            # 盘后模式（含非交易日）
+            # 盘后模式（含非交易日用最后交易日数据）
             ratio_vs_avg = today_vol_raw / hist_vol_avg if hist_vol_avg > 0 else 0
             passed = ratio_vs_avg > 1.1
-            method_tag = "盘后" if not is_weekend else "盘后(非交易日)"
-            reason = (f"{day_tag}{method_tag}全天{_fmt_vol(today_vol_raw)}手 "
+            reason = (f"全天{_fmt_vol(today_vol_raw)}手 "
                       f"{'✅' if passed else '❌'} 近5日均量{_fmt_vol(hist_vol_avg)}手 "
                       f"（vs昨日{_fmt_vol(prev_vol)}手，比值{ratio_vs_avg:.2f}×）")
 
