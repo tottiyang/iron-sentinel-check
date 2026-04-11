@@ -392,9 +392,10 @@ class IronSentinelEngine:
         # 第一优先：realtime_quote（从NeoData行情raw文本提取的板块，最准）
         rt_quote = self._raw.get('realtime_quote', {})
         if rt_quote.get('sector'):
-            industry_name = rt_quote['sector']
-            # 同时保存所有板块列表
-            self._raw['sectors'] = rt_quote.get('sectors', [])
+            # 取最后一个（最细粒度=二级板块，如"光伏设备"比"电力设备"更精准）
+            sectors_list = rt_quote.get('sectors', [])
+            industry_name = sectors_list[-1]['name'] if sectors_list else rt_quote.get('sector', '')
+            self._raw['sectors'] = sectors_list
             src = "realtime_quote"
 
         # 第二优先：quote（腾讯等其他行情来源）
