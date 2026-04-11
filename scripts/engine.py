@@ -385,20 +385,36 @@ class IronSentinelEngine:
             print(f"  [大盘K] ❌ 大盘K线不可用")
 
     def _fetch_industry(self) -> None:
-        """获取行业归属（NeoData优先 → akshare备用）"""
+        """获取行业归属（realtime_quote → quote → 专项查询 → akshare备用）"""
         industry_name = ""
         src = "none"
 
-        # NeoData 优先
-        try:
-            ind_data, ind_src, _ = get_industry_info_neodata(self.stock_code)
-            if ind_data and ind_data.get('industry_name'):
-                industry_name = ind_data['industry_name']
-                src = "neodata"
-        except Exception:
-            pass
+        # 第一优先：realtime_quote（从NeoData行情raw文本提取的板块，最准）
+        rt_quote = self._raw.get('realtime_quote', {})
+        if rt_quote.get('sector'):
+            industry_name = rt_quote['sector']
+            # 同时保存所有板块列表
+            self._raw['sectors'] = rt_quote.get('sectors', [])
+            src = "realtime_quote"
 
-        # akshare 备用（从主营产品关键字推断）
+        # 第二优先：quote（腾讯等其他行情来源）
+        if not industry_name:
+            quote = self._raw.get('quote', {})
+            if quote.get('sector'):
+                industry_name = quote['sector']
+                src = "quote"
+
+        # 第三：NeoData 专项行业查询
+        if not industry_name:
+            try:
+                ind_data, ind_src, _ = get_industry_info_neodata(self.stock_code)
+                if ind_data and ind_data.get('industry_name'):
+                    industry_name = ind_data['industry_name']
+                    src = "neodata"
+            except Exception:
+                pass
+
+        # 第四：akshare（从主营产品关键字推断）
         if not industry_name:
             try:
                 import akshare as ak
@@ -412,12 +428,6 @@ class IronSentinelEngine:
                             break
             except Exception:
                 pass
-
-        # 从腾讯行情中取行业（如果有）
-        quote = self._raw.get('quote', {})
-        if not industry_name and quote.get('sector'):
-            industry_name = quote['sector']
-            src = "tencent"
 
         self._raw['sector_name'] = industry_name or "电力设备"
         self.data_sources['industry'] = src

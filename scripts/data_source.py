@@ -637,6 +637,24 @@ def nd_extract_quote(result: Optional[Dict]) -> Optional[Dict]:
     time_m = re.search(r'数据更新时间[:：]\s*(\d{4}[/\-]\d{2}[/\-]\d{2}\s+\d{2}:\d{2}:\d{2})', content)
     update_time = time_m.group(1) if time_m else ''
 
+    # 提取所属板块（【所属板块】段落）
+    sector_m = re.search(r'【所属板块】\s*(.+?)(?=\n【|$)', content, re.DOTALL)
+    sector_name = ''
+    if sector_m:
+        sec_block = sector_m.group(1).strip()
+        # 提取板块名和涨跌幅：所属的XXX板块涨跌幅为X.XX%
+        sectors = []
+        for m in re.finditer(r'所属的([^板块]+)板块涨跌幅为([-\d.]+)%', sec_block):
+            sectors.append({'name': m.group(1), 'chg': float(m.group(2))})
+        if sectors:
+            sector_name = sectors[0]['name']
+        else:
+            # 降级：取第一行板块名
+            sector_name = re.sub(r'涨跌幅[为：:][-\d.]+[%‰]', '', sec_block).strip().split('\n')[0]
+            sector_name = sector_name.replace('该股票所属的', '').strip()
+    else:
+        sectors = []
+
     return {
         'price':      f(r'最新价格[:：]\s*([-\d.]+)'),
         'chg':        f(r'涨跌幅[:：]\s*([-\d.]+)'),
@@ -654,6 +672,8 @@ def nd_extract_quote(result: Optional[Dict]) -> Optional[Dict]:
         'chg20d':     f(r'20日涨跌幅[:：]\s*([-\d.]+)'),
         'update_time': update_time,
         'raw':        content,
+        'sector':     sector_name,   # 主要板块名（如"电力设备"）
+        'sectors':    sectors,        # [{name, chg}, ...] 所有板块
     }
 
 
