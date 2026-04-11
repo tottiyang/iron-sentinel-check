@@ -147,14 +147,16 @@ class IronSentinelEngine:
             return
 
         today_date = datetime.now().strftime('%Y-%m-%d')
-        # 用实时数据覆盖 bars[-1] 的收盘/开高低/成交量
+        # NeoData/腾讯的 vol 单位是"股"，bars 统一为"手"（1手=100股）
+        vol_raw = quote.get('vol', 0)
+        vol_hand = vol_raw / 100.0 if vol_raw else 0.0
         bars[-1] = {
             'date':   today_date,
             'open':   quote.get('open') or quote.get('prev_close') or bars[-1].get('open'),
             'high':   quote.get('high') or bars[-1].get('high'),
             'low':    quote.get('low')  or bars[-1].get('low'),
             'close':  quote.get('price'),
-            'vol':    quote.get('vol')   or bars[-1].get('vol'),
+            'vol':    vol_hand,           # 股→手，统一单位
             'amount': quote.get('amount') or bars[-1].get('amount'),
             'is_today': True,  # 标记这是今日实时数据
         }
