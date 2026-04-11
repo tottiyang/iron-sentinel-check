@@ -147,9 +147,15 @@ class IronSentinelEngine:
             return
 
         today_date = datetime.now().strftime('%Y-%m-%d')
-        # NeoData/腾讯的 vol 单位是"股"，bars 统一为"手"（1手=100股）
+        # 不同数据源 vol 单位不同：
+        #   - 腾讯: 股（需/100转手）
+        #   - NeoData: 已统一为手（无需转换）
         vol_raw = quote.get('vol', 0)
-        vol_hand = vol_raw / 100.0 if vol_raw else 0.0
+        rt_src = self.data_sources.get('realtime_quote', '')
+        if rt_src == 'tencent':
+            vol_hand = vol_raw / 100.0 if vol_raw else 0.0  # 股→手
+        else:
+            vol_hand = vol_raw  # NeoData 等已统一为手
         bars[-1] = {
             'date':   today_date,
             'open':   quote.get('open') or quote.get('prev_close') or bars[-1].get('open'),
