@@ -1,6 +1,8 @@
 # 铁血哨兵 v2 - A股买点审核系统
 
 > ⚠️ **唯一调用入口**：所有 Agent 和新开会话审核股票时，必须调用本 Skill。旧版 `iron-sentinel` 和 `check_buy_point.py` 已废弃。
+> 
+> 📁 **代码位置**：`~/.qclaw/skills/iron-sentinel/`
 
 ---
 
@@ -37,26 +39,37 @@
 
 | # | 审核项 | 权重 | 通过条件 |
 |---|--------|------|---------|
-| 1 | MACD动能增强 | 15% | 红柱增长 或 绿柱缩短 |
-| 2 | 量能放大 | 10% | 今日成交量 > 近5日均量×1.1 |
-| 3 | 主力净流入 | 15% | 超大单+大单净流入 > 0 |
-| 4 | 上升趋势 | 15% | MA5 > MA10 > MA20 且价格在MA5上方 |
-| 5 | 基本面良好 | 10% | PE 0~150 且 PB < 10 |
-| 6 | 分时均线上方 | 10% | 现价 ≥ 均价 |
-| 7 | 大盘日内非下行 | 5% | 上证或深证涨跌幅 > -0.5% |
-| 8 | 大盘趋势非下行 | 5% | 上证指数 > MA5 |
-| 9 | 板块趋势向上 | 5% | 所属板块涨幅 > 0 |
-| 10 | 龙头活跃 | 10% | 近5日正增≥3/5 且 今日盘中正增≥3/5 |
-| 11 | 筹码集中度 | 10% | 股东户数环比<0 且 前十流通股≥30% |
+| 1 | MACD动能增强 | 8 | 红柱增长 或 绿柱缩短 |
+| 2 | 分时均线上方 | 8 | 现价 ≥ 均价 |
+| 3 | 量能放大 | 8 | 今日成交量 > 近5日均量×1.1 |
+| 4 | 上升趋势 | 8 | MA5 > MA10 > MA20 且价格在MA5上方 |
+| 5 | 主力净流入 | 10 | 超大单+大单净流入 > 0 |
+| 6 | 基本面良好 | 10 | PE 0~150 且 PB < 10 |
+| 7 | 大盘日内非下行 | 8 | 上证或深证涨跌幅 > -0.5% |
+| 8 | 大盘趋势非下行 | 8 | 上证指数 > MA5 |
+| 9 | 板块趋势向上 | 8 | 所属板块涨幅 > 0 |
+| 10 | 龙头活跃 | 12 | 近5日正增≥3/5 且 今日盘中正增≥3/5 |
+| 11 | 筹码集中度 | 12 | 股东户数环比<0 且 前十流通股≥30% |
 
-**综合评分**：通过项权重相加，满分 100 分
-- ≥90 分：⭐ 优质买点
-- 80-89 分：✅ 良好买点
-- 70-79 分：🟡 一般买点
-- 60-69 分：⚠️ 较差买点
-- <60 分：❌ 不推荐买入
+**综合评分**：通过项权重相加，满分 92 分
+- ≥80 分：🟢 优秀买点
+- 70-79 分：🟡 较好买点
+- 50-69 分：⚠️ 一般买点
+- 30-49 分：🔴 较差买点
+- <30 分：⚫ 极差买点
 
 ---
+
+## 三层架构（数据 → 分析 → 展示）
+
+```
+engine.py ──→ analyze.py ──→ build_report.py
+ 采集层       分析层         展示层
+```
+
+- **engine.py**: 数据采集，输出结构化 JSON（含 SHA256 数据指纹防篡改）
+- **analyze.py**: 智能分析，支持规则引擎或 LLM API（可替换）
+- **build_report.py**: 固定格式展示，所有模型输出统一表格样式
 
 ## 使用方式
 
@@ -64,29 +77,37 @@
 
 ```python
 from engine import IronSentinelEngine
+from build_report import build_from_report
 
+# 获取数据
 report = IronSentinelEngine('300438').audit()
-print(report.total_score)          # 85
-print(report.level)               # "✅ 良好买点"
-print(report.suggestion)          # "良好买点，可以考虑买入"
-print(report.to_dict())           # 完整结果（JSON）
+
+# 生成格式化报告
+print(build_from_report(report))
 ```
 
 ### 方式二：命令行
 
 ```bash
-cd ~/.qclaw/skills/iron-sentinel-v2/scripts
-python3 engine.py 300438               # 简洁输出
-python3 engine.py 300438 --format      # 完整格式化报告
-python3 engine.py 300438 --json         # JSON 输出
+cd ~/.qclaw/skills/iron-sentinel/scripts
+
+# 简洁输出（仅评分）
+python3 engine.py 300438
+
+# JSON 输出（供下游分析）
+python3 engine.py 300438 --json
+
+# 完整格式化报告（推荐）
+python3 engine.py 300438 --format
 ```
 
 ### 方式三：审核任意代码格式
 
 ```python
-IronSentinelEngine('300438').audit()   # 数字
+IronSentinelEngine('300438').audit()    # 数字
 IronSentinelEngine('sz300438').audit()  # 带市场前缀
-IronSentinelEngine('sh600519').audit() # 上证
+IronSentinelEngine('sh600519').audit()  # 上证
+IronSentinelEngine('688717').audit()    # 科创板
 ```
 
 ---
@@ -101,7 +122,8 @@ IronSentinelEngine('sh600519').audit() # 上证
 ```
 
 - 每个数据源失败时明确标记，不静默跳过
-- 数据可用率正常应达到 7-8/8 项
+- 数据可用率正常应达到 7-9/9 项
+- **量能单位统一**: NeoData 返回"手"，腾讯返回"股"，引擎层自动转换
 
 ---
 
@@ -109,11 +131,11 @@ IronSentinelEngine('sh600519').audit() # 上证
 
 | 等级 | 分数 | 含义 | 操作建议 |
 |------|------|------|---------|
-| ⭐ 优质买点 | ≥90 | 各项指标健康 | 强烈建议买入 |
-| ✅ 良好买点 | 80-89 | 大部分指标达标 | 可以考虑买入 |
-| 🟡 一般买点 | 70-79 | 条件参差 | 少量试探 |
-| ⚠️ 较差买点 | 60-69 | 风险项多 | 建议观望 |
-| ❌ 不推荐 | <60 | 多项不符 | 耐心等待更好时机 |
+| 🟢 优秀买点 | ≥80 | 各项指标健康 | 强烈建议买入 |
+| 🟡 较好买点 | 70-79 | 大部分指标达标 | 可以考虑买入 |
+| ⚠️ 一般买点 | 50-69 | 条件参差 | 少量试探 |
+| 🔴 较差买点 | 30-49 | 风险项多 | 建议观望 |
+| ⚫ 极差买点 | <30 | 多项不符 | 耐心等待更好时机 |
 
 ---
 
@@ -129,13 +151,15 @@ IronSentinelEngine('sh600519').audit() # 上证
 ## 文件结构
 
 ```
-iron-sentinel-v2/
-├── SKILL.md          # 本文件（使用说明）
+iron-sentinel/
+├── SKILL.md              # 本文件（使用说明）
 └── scripts/
     ├── __init__.py
-    ├── engine.py     # 主引擎（唯一调用入口）
-    ├── data_source.py # 数据源层（三层降级）
-    └── checks.py     # 审核函数（11项独立函数）
+    ├── engine.py         # 主引擎（数据采集层）
+    ├── data_source.py    # 数据源层（三层降级）
+    ├── checks.py         # 审核函数（11项独立函数）
+    ├── analyze.py        # 智能分析层（规则引擎/LLM）
+    └── build_report.py   # 展示层（统一表格格式）
 ```
 
 ---
@@ -144,15 +168,27 @@ iron-sentinel-v2/
 
 审核任意股票时，直接导入 `IronSentinelEngine`：
 
-```
+```python
 审核 <股票名称/代码> → 调用 IronSentinelEngine('<代码>').audit()
 ```
 
 禁止：
 - ❌ 调用 `check_buy_point.py`（已废弃）
-- ❌ 调用 `engine.py` 在 skills/iron-sentinel 旧目录（已禁用）
+- ❌ 调用 skills/iron-sentinel 旧目录（已删除）
 - ❌ 调用 workspace 中的旧版脚本
+
+## 数据完整性保护
+
+- **SHA256 指纹**: engine.py 输出时对 `results` + `leader_details` 生成指纹
+- **防篡改校验**: analyze.py 和 build_report.py 入口校验指纹，被篡改则拒绝处理
+- **原始数据锁定**: 展示层表格数据直接来自 `raw_data`，不得修改
+
+## 非交易日处理
+
+- 周末/节假日自动使用**最后交易日数据**
+- `_effective_now()` 强制走"盘后模式"
+- 量能审核使用历史数据参与计算
 
 ---
 
-*版本：v2.0 | 创建：2026-04-10 | 基于 skills版 + workspace版合并优化*
+*版本：v2.1 | 更新：2026-04-12 | 路径：`~/.qclaw/skills/iron-sentinel/`*
