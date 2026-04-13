@@ -140,13 +140,20 @@ class IronSentinelEngine:
             print(f"  [实时] ⚠️ 今日实时行情不可用（{err or ''}）")
 
     def _inject_today_into_bars(self) -> None:
-        """将今日实时数据注入 bars[-1]，使 MACD/量能计算包含今天"""
+        """将今日实时数据注入 bars[-1]，使 MACD/量能计算包含今天
+        
+        注意：如果 bars[-1] 已经是今天的数据（有 is_today 标记或日期匹配），
+        则直接更新 vol/price，不覆盖历史数据。
+        """
         bars = self._raw.get('daily_bars', [])
         quote = self._raw.get('realtime_quote', {})
         if not bars or not quote or quote.get('price') is None:
             return
 
         today_date = datetime.now().strftime('%Y-%m-%d')
+        last_bar = bars[-1]
+        last_date = last_bar.get('date', '')
+        
         # 不同数据源 vol 单位不同：
         #   - 腾讯: 股（需/100转手）
         #   - NeoData: 已统一为手（无需转换）
@@ -156,16 +163,29 @@ class IronSentinelEngine:
             vol_hand = vol_raw / 100.0 if vol_raw else 0.0  # 股→手
         else:
             vol_hand = vol_raw  # NeoData 等已统一为手
-        bars[-1] = {
-            'date':   today_date,
-            'open':   quote.get('open') or quote.get('prev_close') or bars[-1].get('open'),
-            'high':   quote.get('high') or bars[-1].get('high'),
-            'low':    quote.get('low')  or bars[-1].get('low'),
-            'close':  quote.get('price'),
-            'vol':    vol_hand,           # 股→手，统一单位
-            'amount': quote.get('amount') or bars[-1].get('amount'),
-            'is_today': True,  # 标记这是今日实时数据
-        }
+        
+        # 如果 bars[-1] 已经是今日数据（盘中多次调用），直接更新
+        if last_bar.get('is_today') or last_date == today_date:
+            last_bar.update({
+                'close': quote.get('price'),
+                'vol': vol_hand,
+                'high': max(last_bar.get('high', 0), quote.get('high', 0), quote.get('price', 0)),
+                'low': min(last_bar.get('low', float('inf')), quote.get('low', float('inf')), quote.get('price', float('inf'))) if last_bar.get('low') else quote.get('low') or quote.get('price'),
+                'is_today': True,
+            })
+        else:
+            # bars[-1] 是历史数据（如上周五），追加今日数据
+            bars.append({
+                'date': today_date,
+                'open': quote.get('open') or quote.get('prev_close') or last_bar.get('close'),
+                'high': quote.get('high') or quote.get('price'),
+                'low': quote.get('low') or quote.get('price'),
+                'close': quote.get('price'),
+                'vol': vol_hand,
+                'amount': quote.get('amount'),
+                'is_today': True,
+            })
+        
         # 标记数据来源
         rt_src = self.data_sources.get('realtime_quote', '')
         if rt_src and rt_src != 'none':
