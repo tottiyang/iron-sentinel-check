@@ -155,15 +155,20 @@ class IronSentinelEngine:
         last_date = last_bar.get('date', '')
         
         # 不同数据源 vol 单位不同：
-        #   - 腾讯: 股（需/100转手）
-        #   - NeoData: 股（需/100转手）
-        #   - 新浪K线: 已在data_source.py中转为手
+        #   - 新浪K线历史: 已在data_source.py中转为手
+        #   - 腾讯实时: 科创板(688xxx)=股(需÷100)，创业板/主板=手(直接用)
+        #   - NeoData: 科创板=股(需÷100)，创业板/主板=手(直接用)
         vol_raw = quote.get('vol', 0)
         rt_src = self.data_sources.get('realtime_quote', '')
-        if rt_src in ('tencent', 'neodata'):
-            vol_hand = vol_raw / 100.0 if vol_raw else 0.0  # 股→手
+        
+        # 判断板块：科创板(688xxx)需要转换
+        is_kcb = self.stock_code.lower().startswith('sh688') or \
+                 self.stock_code.lower().startswith('sz688')
+        
+        if is_kcb:
+            vol_hand = vol_raw / 100.0 if vol_raw else 0.0  # 科创板：股→手
         else:
-            vol_hand = vol_raw  # 其他已统一为手
+            vol_hand = vol_raw  # 创业板/主板：已是手
         
         # 如果 bars[-1] 已经是今日数据（盘中多次调用），直接更新
         if last_bar.get('is_today') or last_date == today_date:
