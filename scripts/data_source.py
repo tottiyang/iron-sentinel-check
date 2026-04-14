@@ -171,7 +171,11 @@ def get_realtime_tencent(code: str) -> Tuple[Optional[Dict], str, str]:
         price = float(f(3, 0))  # 当前价
         chg = float(f(31, 0))  # 涨跌额
         chg_pct = float(f(32, 0))  # 涨跌幅(%)
-        vol = float(f(36, 0)) * 100  # 成交量(手→股)
+        # 腾讯vol字段单位因板块不同（2026-04-14确认）：
+        #   - 科创板(688xxx): 股（需在engine层÷100）
+        #   - 创业板/主板: 手（直接用）
+        #   不在此处转换，由engine._inject_today_into_bars()根据板块判断
+        vol = float(f(36, 0))  # 成交量（原始值，不转换）
         amount = float(f(37, 0)) * 10000  # 成交额(万→元)
 
         return {

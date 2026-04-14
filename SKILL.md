@@ -221,6 +221,24 @@ is_kcb = code.lower().startswith(('sh688', 'sz688'))
 vol_hand = vol_raw / 100.0 if is_kcb else vol_raw
 ```
 
+### 2026-04-14 data_source.py 腾讯vol处理错误
+
+**问题**: `get_realtime_tencent()` 中 `vol = float(f(36, 0)) * 100`，错误地把腾讯vol × 100。
+
+**根因**: 
+- 腾讯字段36的单位：科创板=股，创业板/主板=手
+- 代码假设"手→股"转换，但创业板/主板返回的本身就是"手"
+- 导致创业板vol被放大100倍（9万手→900万手）
+
+**修复**: 
+- 移除 `* 100`，直接返回原始值
+- 单位转换由 `engine._inject_today_into_bars()` 根据板块判断处理
+
+**验证**: 
+- 300693创业板：9.47万手 ✅（修复前890万手）
+- 603919主板：1.06万手 ✅
+- 688717科创板：5.25万手 ✅
+
 ---
 
-*版本：v2.2 | 更新：2026-04-13 | 路径：`~/.qclaw/skills/iron-sentinel/`*
+*版本：v2.3 | 更新：2026-04-14 | 路径：`~/.qclaw/skills/iron-sentinel/`*
