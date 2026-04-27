@@ -34,8 +34,8 @@ def fetch_concept_boards():
     df = ak.stock_board_concept_name_ths()
     boards = []
     for _, row in df.iterrows():
-        code_raw = str(row.get("板块代码", "")).strip()
-        name = str(row.get("板块名称", "")).strip()
+        code_raw = str(row.get("code", "")).strip()
+        name = str(row.get("name", "")).strip()
         if not code_raw or not name:
             continue
         # 统一 6 位数字格式
@@ -49,8 +49,8 @@ def fetch_industry_boards():
     df = ak.stock_board_industry_name_ths()
     boards = []
     for _, row in df.iterrows():
-        code_raw = str(row.get("板块代码", "")).strip()
-        name = str(row.get("板块名称", "")).strip()
+        code_raw = str(row.get("code", "")).strip()
+        name = str(row.get("name", "")).strip()
         if not code_raw or not name:
             continue
         code = f"THS_{int(code_raw):06d}"

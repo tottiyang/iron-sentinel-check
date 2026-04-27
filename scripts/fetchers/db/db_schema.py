@@ -15,7 +15,16 @@
 import sqlite3
 import os
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "../stock_data.db")
+# 数据目录规范 v1.0 - 统一路径，禁止随意变更
+# 文档: ~/.qclaw/skills/iron-sentinel/DATA_DIR_SPEC.md
+SKILL_DIR = os.path.expanduser("~/.qclaw/skills/iron-sentinel")
+DATA_DIR = os.path.join(SKILL_DIR, "data")
+DB_PATH = os.path.join(DATA_DIR, "stock_data.db")
+BACKUP_DIR = os.path.join(DATA_DIR, "backups")
+
+# 确保目录存在
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
 
 def get_conn():
