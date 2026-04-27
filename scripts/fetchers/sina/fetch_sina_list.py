@@ -44,7 +44,10 @@ def fetch_industry_boards():
         name = str(row.get("板块", "")).strip()
         count = int(row.get("公司家数", 0))
         if label and name:
-            boards.append((label, name, count))
+            # 新浪行业板块 label 已经是 hangye_XXX 格式
+            # 统一加上 SINA_ 前缀作为 board_code
+            board_code = f"SINA_{label}"
+            boards.append((board_code, name, count))
     return boards
 
 
@@ -78,11 +81,11 @@ def save_industry_boards(boards):
     conn = get_conn()
     cur = conn.cursor()
     added = updated = 0
-    for code, name, count in boards:
+    for board_code, name, count in boards:
         cur.execute(
             "INSERT OR IGNORE INTO industry_boards (board_code, board_name, source, stock_count) "
             "VALUES (?, ?, 'sina', ?)",
-            (code, name, count),
+            (board_code, name, count),
         )
         if cur.rowcount > 0:
             added += 1
@@ -90,7 +93,7 @@ def save_industry_boards(boards):
             cur.execute(
                 "UPDATE industry_boards SET board_name=?, stock_count=? "
                 "WHERE board_code=? AND source='sina'",
-                (name, count, code),
+                (name, count, board_code),
             )
             updated += 1
     conn.commit()

@@ -81,7 +81,8 @@ def fetch_concept_relations(limit=0, dry_run=False):
     errors = 0
 
     for i, (board_code, board_name) in enumerate(pending):
-        label = board_code.replace("SINA_", "", 1)
+        # concept 板块的 label 就是 board_code（如 gn_hwqc）
+        label = board_code
         try:
             stocks = fetch_sector_stocks(label)
             if stocks:
@@ -147,12 +148,18 @@ def fetch_industry_relations(limit=0, dry_run=False):
         pending = pending[:limit]
 
     print(f"[SINA-industry] 需采集 {len(pending)} 个行业板块（已有 {len(done)} 个完成）")
+    print(f"    示例 board_code: {pending[0] if pending else 'N/A'}")
 
     total_added = 0
     errors = 0
 
     for i, board_code in enumerate(pending):
-        label = board_code.replace("SINA_", "", 1)
+        # 行业板块的 board_code 格式为 SINA_hangye_XXX
+        # label 需要去掉 SINA_ 前缀，得到 hangye_XXX
+        if board_code.startswith("SINA_"):
+            label = board_code[5:]  # 去掉 "SINA_" 前缀
+        else:
+            label = board_code
         try:
             stocks = fetch_sector_stocks(label)
             if stocks:
@@ -174,14 +181,14 @@ def fetch_industry_relations(limit=0, dry_run=False):
         except Exception as e:
             errors += 1
             if errors <= 3:
-                print(f"    ERROR {board_code}: {e}")
+                print(f"    ERROR {board_code} (label={label}): {e}")
 
         time.sleep(SLEEP_SEC)
 
         if (i + 1) % BATCH_LOG == 0 or i == len(pending) - 1:
             remaining = len(pending) - (i + 1)
             print(
-                f"  [{i+1}/{len(pending)}] +{total_added} 条, 剩余 {remaining} 板块"
+                f"  [{i+1}/{len(pending)}] +{total_added} 条, 错误{errors}, 剩余 {remaining} 板块"
             )
 
     return len(pending)
