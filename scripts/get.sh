@@ -1,1 +1,1 @@
-cd ~/.qclaw/skills/iron-sentinel/scripts && python3 engine.py $1 --format
+cd ~/.qclaw/skills/iron-sentinel/scripts/analysis && python3 engine.py $1 --format
