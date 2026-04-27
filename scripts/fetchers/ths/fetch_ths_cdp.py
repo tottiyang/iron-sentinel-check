@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-THS 成分股采集 (CDP) - 简化版
+THS 成分股采集 (CDP) - 优化版（带重连和容错）
 """
 import json
 import re
@@ -8,35 +8,73 @@ import time
 import sys
 import os
 import urllib.request
+import urllib.error
 import websocket
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from fetchers.db.db_schema import get_conn
 
 CDP_PORT = 28800
-SLEEP_SEC = 1.0
+SLEEP_SEC = 1.5
+MAX_RETRIES = 3
+BATCH_SIZE = 5  # 每批处理数量，每批后重连
 
 
 def get_cdp_ws_url():
-    resp = urllib.request.urlopen(f"http://127.0.0.1:{CDP_PORT}/json/version")
-    info = json.loads(resp.read())
-    return info["webSocketDebuggerUrl"]
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = urllib.request.urlopen(f"http://127.0.0.1:{CDP_PORT}/json/version", timeout=5)
+            info = json.loads(resp.read())
+            return info["webSocketDebuggerUrl"]
+        except Exception as e:
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(1)
+                continue
+            raise
+
+
+def create_ws_connection():
+    """创建 WebSocket 连接，带重试"""
+    for attempt in range(MAX_RETRIES):
+        try:
+            ws_url = get_cdp_ws_url()
+            ws = websocket.create_connection(ws_url, timeout=30)
+            return ws
+        except Exception as e:
+            if attempt < MAX_RETRIES - 1:
+                print(f"  [WS] 连接失败，重试 {attempt + 1}/{MAX_RETRIES}...")
+                time.sleep(2)
+                continue
+            raise
+
+
+def send_with_retry(ws, method, params=None, session_id=None, timeout=10):
+    """发送 CDP 命令，带超时和错误处理"""
+    msg_id = int(time.time() * 1000000) % 1000000000
+    msg = {"id": msg_id, "method": method}
+    if params:
+        msg["params"] = params
+    if session_id:
+        msg["sessionId"] = session_id
+    
+    ws.send(json.dumps(msg))
+    
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            resp = json.loads(ws.recv())
+            if resp.get("id") == msg_id:
+                return resp
+        except websocket.WebSocketTimeoutException:
+            raise TimeoutError(f"CDP timeout: {method}")
+    raise TimeoutError(f"CDP timeout: {method}")
 
 
 def scrape_board_stocks(ws, session_id, board_code, is_concept=True):
     """采集单个板块的成分股"""
-    msg_id = [0]
     
     def send_to_session(method, params=None):
-        msg_id[0] += 1
-        msg = {"id": msg_id[0], "method": method, "sessionId": session_id}
-        if params:
-            msg["params"] = params
-        ws.send(json.dumps(msg))
-        while True:
-            resp = json.loads(ws.recv())
-            if resp.get("id") == msg_id[0]:
-                return resp
+        return send_with_retry(ws, method, params, session_id, timeout=10)
     
     # 导航到板块页面
     send_to_session("Page.enable")
@@ -45,7 +83,8 @@ def scrape_board_stocks(ws, session_id, board_code, is_concept=True):
     if is_concept:
         url = f"https://q.10jqka.com.cn/gn/detail/code/{raw_code}/"
     else:
-        url = f"https://q.10jqka.com.cn/hy/detail/code/{raw_code}/"
+        # THS 行业板块使用 /thshy/ 路径，不是 /hy/
+        url = f"https://q.10jqka.com.cn/thshy/detail/code/{raw_code}/"
     
     send_to_session("Page.navigate", {"url": url})
     time.sleep(3)
@@ -177,8 +216,8 @@ def fetch_concept_relations(ws, limit=0):
     return total_added, errors
 
 
-def fetch_industry_relations(ws, limit=0):
-    """采集行业板块成分股"""
+def fetch_industry_relations(ws=None, limit=0):
+    """采集行业板块成分股 - 支持分批重连"""
     conn = get_conn()
     cur = conn.cursor()
     
@@ -197,53 +236,69 @@ def fetch_industry_relations(ws, limit=0):
     
     total_added = 0
     errors = 0
+    ws_owned = ws is None
     
-    for i, (board_code, board_name) in enumerate(pending):
-        msg_id = [0]
-        def send(method, params=None):
-            msg_id[0] += 1
-            msg = {"id": msg_id[0], "method": method}
-            if params:
-                msg["params"] = params
-            ws.send(json.dumps(msg))
-            while True:
-                resp = json.loads(ws.recv())
-                if resp.get("id") == msg_id[0]:
-                    return resp
+    # 分批处理，每批后重连
+    for batch_start in range(0, len(pending), BATCH_SIZE):
+        batch = pending[batch_start:batch_start + BATCH_SIZE]
         
-        try:
-            r = send("Target.createTarget", {"url": "about:blank"})
-            target_id = r["result"]["targetId"]
-            r2 = send("Target.attachToTarget", {"targetId": target_id, "flatten": True})
-            session_id = r2["result"]["sessionId"]
-            
-            stocks = scrape_board_stocks(ws, session_id, board_code, is_concept=False)
-            
-            if stocks:
-                conn = get_conn()
-                cur = conn.cursor()
-                for sc in stocks:
-                    cur.execute(
-                        "INSERT OR IGNORE INTO stock_industry_board (stock_code, board_code, source, fetched_at) "
-                        "VALUES (?, ?, 'ths', datetime('now'))",
-                        (sc, board_code),
-                    )
-                    if cur.rowcount > 0:
-                        total_added += 1
-                conn.commit()
-                conn.close()
-            
-            if (i + 1) % 10 == 0 or i == len(pending) - 1:
-                print(f"  [{i+1}/{len(pending)}] {board_name}: {len(stocks)} 只, 累计+{total_added} 条")
-            
-            send("Target.closeTarget", {"targetId": target_id})
-            
-        except Exception as e:
-            errors += 1
-            if errors <= 5:
-                print(f"  [{i+1}/{len(pending)}] {board_name}: ERR {e}")
+        # 每批开始前检查/创建连接
+        if ws_owned:
+            try:
+                ws = create_ws_connection()
+            except Exception as e:
+                print(f"  [Batch {batch_start//BATCH_SIZE + 1}] 连接失败: {e}")
+                errors += len(batch)
+                continue
         
-        time.sleep(SLEEP_SEC)
+        for i, (board_code, board_name) in enumerate(batch):
+            global_idx = batch_start + i
+            
+            def send(method, params=None):
+                return send_with_retry(ws, method, params, timeout=10)
+            
+            try:
+                r = send("Target.createTarget", {"url": "about:blank"})
+                target_id = r["result"]["targetId"]
+                r2 = send("Target.attachToTarget", {"targetId": target_id, "flatten": True})
+                session_id = r2["result"]["sessionId"]
+                
+                stocks = scrape_board_stocks(ws, session_id, board_code, is_concept=False)
+                
+                if stocks:
+                    conn = get_conn()
+                    cur = conn.cursor()
+                    for sc in stocks:
+                        cur.execute(
+                            "INSERT OR IGNORE INTO stock_industry_board (stock_code, board_code, source, fetched_at) "
+                            "VALUES (?, ?, 'ths', datetime('now'))",
+                            (sc, board_code),
+                        )
+                        if cur.rowcount > 0:
+                            total_added += 1
+                    conn.commit()
+                    conn.close()
+                
+                if (global_idx + 1) % 10 == 0 or global_idx == len(pending) - 1:
+                    print(f"  [{global_idx+1}/{len(pending)}] {board_name}: {len(stocks)} 只, 累计+{total_added} 条")
+                
+                send("Target.closeTarget", {"targetId": target_id})
+                
+            except Exception as e:
+                errors += 1
+                if errors <= 10:
+                    print(f"  [{global_idx+1}/{len(pending)}] {board_name}: ERR {e}")
+            
+            time.sleep(SLEEP_SEC)
+        
+        # 每批结束后关闭连接
+        if ws_owned and ws:
+            try:
+                ws.close()
+            except:
+                pass
+            ws = None
+            time.sleep(1)  # 批次间休息
     
     return total_added, errors
 
@@ -251,19 +306,38 @@ def fetch_industry_relations(ws, limit=0):
 def main():
     print("=== THS 成分股采集 (CDP) ===")
     print(f"Chrome CDP: http://localhost:{CDP_PORT}")
+    print(f"批次大小: {BATCH_SIZE}, 重试次数: {MAX_RETRIES}")
     
-    ws_url = get_cdp_ws_url()
-    ws = websocket.create_connection(ws_url, timeout=20)
+    # 检查概念板块是否已完成
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM concept_boards WHERE source='ths'")
+    total_concepts = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(DISTINCT board_code) FROM stock_concept WHERE source='ths'")
+    done_concepts = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM industry_boards WHERE source='ths'")
+    total_industries = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(DISTINCT board_code) FROM stock_industry_board WHERE source='ths'")
+    done_industries = cur.fetchone()[0]
+    conn.close()
     
-    # 采集概念板块
-    print("\n[1/2] 采集概念板块成分股...")
-    concept_added, concept_err = fetch_concept_relations(ws)
+    # 采集概念板块（如未完成）
+    if done_concepts < total_concepts:
+        print(f"\n[1/2] 采集概念板块成分股... ({done_concepts}/{total_concepts} 已完成)")
+        ws = create_ws_connection()
+        concept_added, concept_err = fetch_concept_relations(ws)
+        ws.close()
+    else:
+        print(f"\n[1/2] 概念板块已完成 ({done_concepts}/{total_concepts})")
+        concept_added, concept_err = 0, 0
     
-    # 采集行业板块
-    print("\n[2/2] 采集行业板块成分股...")
-    industry_added, industry_err = fetch_industry_relations(ws)
-    
-    ws.close()
+    # 采集行业板块（如未完成）
+    if done_industries < total_industries:
+        print(f"\n[2/2] 采集行业板块成分股... ({done_industries}/{total_industries} 已完成)")
+        industry_added, industry_err = fetch_industry_relations()
+    else:
+        print(f"\n[2/2] 行业板块已完成 ({done_industries}/{total_industries})")
+        industry_added, industry_err = 0, 0
     
     print(f"\n=== 完成 ===")
     print(f"概念板块: +{concept_added} 条, {concept_err} 个错误")
