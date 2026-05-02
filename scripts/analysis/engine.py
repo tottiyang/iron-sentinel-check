@@ -45,6 +45,13 @@ from checks import (
     get_level, get_suggestion,
 )
 
+# v3 板块分析模块
+from sector_analysis_v3 import (
+    analyze_stock_sectors,
+    check_sector_trend_v3,
+    check_sector_leaders_v3,
+)
+
 # ==================== 主引擎类 ====================
 
 class IronSentinelEngine:
@@ -532,8 +539,8 @@ class IronSentinelEngine:
                     if hc_m:
                         holder_count = float(hc_m.group(1)) * 10000
 
-                    # 环比变化（%，支持括号内格式：股东人数环比变化10.87%））
-                    chg_m = re.search(r'股东人数环比变化[（(]?[^)\d]*([-\d.]+)%?', txt)
+                    # 环比变化（%，支持负值：-16.79%）
+                    chg_m = re.search(r'股东人数环比变化\s*([-\d.]+)%?', txt)
                     if chg_m:
                         holder_chg = float(chg_m.group(1))
 
@@ -650,15 +657,56 @@ class IronSentinelEngine:
         results.append(r)
         print(f"  [{r.rule_num:02d}] {r.rule_name}: {'✅' if r.passed else '❌'} {r.reason[:60]}")
 
-        # 9. 板块趋势
-        r = check_sector_trend(sector_trd)
+        # 9. 板块趋势 (v3)
+        # 优先使用新版多维度板块分析，失败则降级到旧版
+        sector_v3_result = None
+        core_boards = []
+        sector_v3_data = {}
+        leader_details = []  # 初始化，供报告层使用
+        try:
+            sector_v3_data = analyze_stock_sectors(self.stock_code)
+            core_boards = sector_v3_data.get('core_boards', [])
+            if core_boards:
+                sector_v3_result = check_sector_trend_v3(core_boards)
+        except Exception:
+            pass
+
+        if sector_v3_result:
+            r = sector_v3_result
+            # 打印核心板块摘要
+            board_summary = ', '.join([b['name'] for b in core_boards[:3]])
+            print(f"\n📊 板块分析v3: {board_summary}")
+        else:
+            r = check_sector_trend(sector_trd)
         results.append(r)
         print(f"  [{r.rule_num:02d}] {r.rule_name}: {'✅' if r.passed else '❌'} {r.reason[:60]}")
 
-        # 10. 龙头活跃（双维度）
-        print(f"\n🏢 龙头详情（近5日 / 今日盘中）:")
-        leader_details, src_used = self._fetch_leader_details(sector_name)
-        r = check_sector_leaders(sector_name, leader_details, src_used)
+        # 10. 龙头活跃 (v3)
+        if sector_v3_result and core_boards:
+            r = check_sector_leaders_v3(core_boards, self.stock_code)
+            # 从 v3 数据构造 leader_details 供报告层展示
+            leaders_map = sector_v3_data.get('leaders', {})
+            for board_name, leaders in leaders_map.items():
+                for l in leaders:
+                    leader_details.append({
+                        'name': l.get('stock_name', ''),
+                        'code': l.get('stock_code', ''),
+                        'gain_today': l.get('chg_pct'),
+                        'gain_5d': l.get('gain_5d', 0),
+                    })
+                break  # 只取第一个板块的龙头（与旧版行为一致）
+            # 打印龙头详情
+            leaders_info = r.raw_value.get('leaders', []) if r.raw_value else []
+            if leaders_info:
+                print(f"\n🏢 板块龙头v3:")
+                for line in leaders_info[:5]:
+                    print(f"    {line}")
+            position_info = r.raw_value.get('role', '未知') if r.raw_value else '未知'
+            print(f"    个股地位: [{position_info}]")
+        else:
+            print(f"\n🏢 龙头详情（近5日 / 今日盘中）:")
+            leader_details, src_used = self._fetch_leader_details(sector_name)
+            r = check_sector_leaders(sector_name, leader_details, src_used)
         results.append(r)
         print(f"  [{r.rule_num:02d}] {r.rule_name}: {'✅' if r.passed else '❌'} {r.reason[:60]}")
 
