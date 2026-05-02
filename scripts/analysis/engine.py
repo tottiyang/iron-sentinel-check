@@ -160,7 +160,11 @@ class IronSentinelEngine:
         today_date = datetime.now().strftime('%Y-%m-%d')
         last_bar = bars[-1]
         last_date = last_bar.get('date', '')
-        
+
+        # 非交易日（周末/节假日）：bars[-1] 已是最后交易日，不注入假今日数据
+        if last_date != today_date and datetime.now().weekday() >= 5:
+            return
+
         # 不同数据源 vol 单位不同：
         #   - 新浪K线历史: 已在data_source.py中转为手
         #   - 腾讯实时: 科创板(688xxx)=股(需÷100)，创业板/主板=手(直接用)
