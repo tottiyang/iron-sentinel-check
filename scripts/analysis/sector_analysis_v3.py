@@ -990,6 +990,7 @@ def check_sector_leaders_v3(core_boards: List[Dict], stock_code: str) -> CheckRe
                     'code': l.get('stock_code', ''),
                     'gain_today': l.get('chg_pct'),
                     'gain_5d': l.get('gain_5d', 0),
+                    'role': l.get('role', ''),
                 }
                 for l in best_leaders
             ],

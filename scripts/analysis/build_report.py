@@ -197,15 +197,17 @@ def _build(
     if leader_details:
         lines.append("")
         lines.append("  🏢 板块龙头详情")
-        lines.append("  " + "-" * 54)
-        lines.append(f"  {'序号':<4} {'名称':<10} {'今日涨跌幅':>10}  {'近5日涨跌幅':>10}")
-        lines.append("  " + "-" * 54)
+        lines.append("  " + "-" * 64)
+        lines.append(f"  {'序号':<4} {'名称':<10} {'角色':<10} {'今日涨跌幅':>10}  {'近5日涨跌幅':>10}")
+        lines.append("  " + "-" * 64)
         for i, d in enumerate(leader_details, 1):
             gt  = f"{d.get('gain_today'):+.2f}%" if d.get('gain_today') is not None else "  N/A  "
             g5  = f"{d.get('gain_5d'):+.2f}%"    if d.get('gain_5d')    is not None else "  N/A  "
             flag_t = "📈" if d.get('gain_today') and d.get('gain_today') > 0 else "📉"
             flag_5 = "📈" if d.get('gain_5d')    and d.get('gain_5d')    > 0 else "📉"
-            lines.append(f"  {i:<4} {d.get('name',''):<10} {flag_t} {gt:>10}  {flag_5} {g5:>10}")
+            role = d.get('role', '')
+            role_str = f"[{role}]" if role else ''
+            lines.append(f"  {i:<4} {d.get('name',''):<10} {role_str:<10} {flag_t} {gt:>10}  {flag_5} {g5:>10}")
         # 维度统计（从 raw_value 中取）
         r10 = by_num.get(10, {})
         extra = r10.get("raw_value", {}) if isinstance(r10.get("raw_value"), dict) else {}
