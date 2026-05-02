@@ -613,13 +613,15 @@ def _fetch_board_leaders(board_data: Dict, top_n: int = 8) -> List[Dict]:
     if top:
         # 情绪龙头：涨幅最高
         top[0]['role'] = '情绪龙头'
-        # 中军：市值大+涨幅稳（在前半段里找市值最大的）
+        # 中军：市值大+涨幅稳（在前半段里找市值最大的，若是情绪龙头则顺延）
         mid_idx = len(top) // 2
         mid_candidates = top[:max(mid_idx, 2)]
         if mid_candidates:
-            zhongjun = max(mid_candidates, key=lambda x: x.get('_mkt_cap', 0))
-            if zhongjun.get('role') != '情绪龙头':
-                zhongjun['role'] = '中军'
+            mid_sorted = sorted(mid_candidates, key=lambda x: x.get('_mkt_cap', 0), reverse=True)
+            for c in mid_sorted:
+                if c.get('role') != '情绪龙头':
+                    c['role'] = '中军'
+                    break
         # 补涨候选：涨幅滞后但放量（涨幅低但成交额高）
         for c in top:
             if c.get('role'):
