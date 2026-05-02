@@ -129,12 +129,12 @@ def _extract_risks(results: list) -> list:
             continue
         rn = r.get("rule_num")
         reason = r.get("reason", "")
-        if rn == 3:  risks.append(f"量能不足：{reason[:30]}")
-        elif rn == 4: risks.append(f"均线空头排列：{reason[:30]}")
-        elif rn == 5: risks.append(f"主力净流出：{reason[:30]}")
-        elif rn == 6: risks.append(f"基本面偏差：{reason[:30]}")
-        elif rn == 10: risks.append(f"龙头疲软：{reason[:30]}")
-        elif rn == 11: risks.append(f"筹码分散：{reason[:30]}")
+        if rn == 3:  risks.append(f"量能不足：{reason[:60]}")
+        elif rn == 4: risks.append(f"均线空头排列：{reason[:60]}")
+        elif rn == 5: risks.append(f"主力净流出：{reason[:60]}")
+        elif rn == 6: risks.append(f"基本面偏差：{reason[:60]}")
+        elif rn == 10: risks.append(f"龙头疲软：{reason[:60]}")
+        elif rn == 11: risks.append(f"筹码分散：{reason[:60]}")
     return risks[:5]
 
 
@@ -145,11 +145,11 @@ def _extract_observations(results: list) -> list:
             continue
         rn = r.get("rule_num")
         reason = r.get("reason", "")
-        if rn == 1: obs.append(f"MACD 动能改善：{reason[:30]}")
-        elif rn == 2: obs.append(f"分时多头控盘：{reason[:30]}")
-        elif rn == 7: obs.append(f"大盘走强：{reason[:30]}")
-        elif rn == 8: obs.append(f"大盘趋势向上：{reason[:30]}")
-        elif rn == 9: obs.append(f"板块强势：{reason[:30]}")
+        if rn == 1: obs.append(f"MACD 动能改善：{reason[:60]}")
+        elif rn == 2: obs.append(f"分时多头控盘：{reason[:60]}")
+        elif rn == 7: obs.append(f"大盘走强：{reason[:60]}")
+        elif rn == 8: obs.append(f"大盘趋势向上：{reason[:60]}")
+        elif rn == 9: obs.append(f"板块强势：{reason[:60]}")
     return obs[:5]
 
 

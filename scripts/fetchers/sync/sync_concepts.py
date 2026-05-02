@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from fetchers.db.db_schema import get_conn
 from fetchers.sina.fetch_sina_concepts import fetch_concept_relations as sina_fetch
 from fetchers.ths.fetch_ths_concepts import fetch_concept_relations as ths_fetch
-from fetchers.em.fetch_em_concepts import fetch_concept_relations as em_fetch
+from fetchers.em.fetch_em_concepts import main as em_main
 
 
 def get_meta(key, default=None):
@@ -68,7 +68,14 @@ def sync_ths(limit=0):
 def sync_em(limit=0):
     """同步 EM 概念成分股（CDN 不通则跳过）"""
     print("\n=== EM 概念成分股同步 ===")
-    remaining = em_fetch(limit=limit)
+    # 使用 main() 函数，它会返回剩余待处理数量
+    import sys
+    old_argv = sys.argv
+    try:
+        sys.argv = ['sync_concepts.py', '--limit', str(limit)]
+        remaining = em_main()
+    finally:
+        sys.argv = old_argv
     set_meta("sync_concepts_em_last_run", time.strftime("%Y-%m-%d %H:%M:%S"))
     return remaining
 
