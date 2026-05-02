@@ -391,6 +391,7 @@ def _fetch_constituent_data(stock_code: str) -> Optional[Dict]:
 
     return {
         'stock_code': stock_code,
+        'stock_name': rt.get('name', ''),
         'chg_pct': chg_pct,
         'gain_5d': gain_5d,
         'gain_20d': gain_20d,
@@ -605,7 +606,10 @@ def _fetch_board_leaders(board_data: Dict, top_n: int = 8) -> List[Dict]:
     sorted_cons = sorted(constituents, key=lambda x: x['_score'], reverse=True)
     top = sorted_cons[:top_n]
 
-    # 标注角色
+    # 标注角色（先清除旧角色，防止重复调用时残留）
+    for c in top:
+        c.pop('role', None)
+
     if top:
         # 情绪龙头：涨幅最高
         top[0]['role'] = '情绪龙头'
@@ -957,6 +961,12 @@ def check_sector_leaders_v3(core_boards: List[Dict], stock_code: str) -> CheckRe
             f"今日{l.get('chg_pct', 0):+.2f}% 5日{l.get('gain_5d', 0):+.2f}%"
         )
 
+    # 兼容旧版统计字段（供 build_report 展示）
+    gains_5d = [l.get('gain_5d', 0) for l in best_leaders]
+    gains_today = [l.get('chg_pct', 0) for l in best_leaders]
+    pos_5d = sum(1 for g in gains_5d if g > 0)
+    pos_today = sum(1 for g in gains_today if g > 0)
+
     reason = (f"板块活跃度{activity}/60(5日{avg_5d:+.1f}% 今日{avg_today:+.1f}% 涨停{limit_up}家) | "
               f"个股地位[{role}]{position_score}/40 | 总分{total}")
 
@@ -971,6 +981,18 @@ def check_sector_leaders_v3(core_boards: List[Dict], stock_code: str) -> CheckRe
             'vs_avg': stock_position.get('vs_avg', 0) if stock_position else 0,
             'leaders': leader_lines,
             'limit_up_count': limit_up,
+            'dim1_pos_5d': pos_5d,
+            'dim2_pos_today': pos_today,
+            'leader_count': len(best_leaders),
+            'leader_raw_data': [
+                {
+                    'name': l.get('stock_name', ''),
+                    'code': l.get('stock_code', ''),
+                    'gain_today': l.get('chg_pct'),
+                    'gain_5d': l.get('gain_5d', 0),
+                }
+                for l in best_leaders
+            ],
         },
         reason,
         True, "dual_track",

@@ -684,24 +684,16 @@ class IronSentinelEngine:
         # 10. 龙头活跃 (v3)
         if sector_v3_result and core_boards:
             r = check_sector_leaders_v3(core_boards, self.stock_code)
-            # 从 v3 数据构造 leader_details 供报告层展示
-            leaders_map = sector_v3_data.get('leaders', {})
-            for board_name, leaders in leaders_map.items():
-                for l in leaders:
-                    leader_details.append({
-                        'name': l.get('stock_name', ''),
-                        'code': l.get('stock_code', ''),
-                        'gain_today': l.get('chg_pct'),
-                        'gain_5d': l.get('gain_5d', 0),
-                    })
-                break  # 只取第一个板块的龙头（与旧版行为一致）
+            # 从 v3 结果构造 leader_details（与 check_sector_leaders_v3 实际使用的 best_leaders 保持一致）
+            raw = r.raw_value or {}
+            leader_details = raw.get('leader_raw_data', [])
             # 打印龙头详情
-            leaders_info = r.raw_value.get('leaders', []) if r.raw_value else []
+            leaders_info = raw.get('leaders', [])
             if leaders_info:
                 print(f"\n🏢 板块龙头v3:")
-                for line in leaders_info[:5]:
+                for line in leaders_info[:8]:
                     print(f"    {line}")
-            position_info = r.raw_value.get('role', '未知') if r.raw_value else '未知'
+            position_info = raw.get('role', '未知')
             print(f"    个股地位: [{position_info}]")
         else:
             print(f"\n🏢 龙头详情（近5日 / 今日盘中）:")

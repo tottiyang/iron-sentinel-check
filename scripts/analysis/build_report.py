@@ -211,7 +211,8 @@ def _build(
         extra = r10.get("raw_value", {}) if isinstance(r10.get("raw_value"), dict) else {}
         pos_5d    = extra.get("dim1_pos_5d", 0)
         pos_today = extra.get("dim2_pos_today", 0)
-        lines.append(f"  近5日正增: {pos_5d}/5  今日盘中正增: {pos_today}/{len(leader_details)}")
+        leader_cnt = extra.get("leader_count", len(leader_details))
+        lines.append(f"  近5日正增: {pos_5d}/{leader_cnt}  今日盘中正增: {pos_today}/{leader_cnt}")
 
     # ── 关键阈值 ──
     if thresholds:
