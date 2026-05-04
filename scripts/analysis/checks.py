@@ -315,6 +315,9 @@ def check_volume(bars: List[Dict], realtime: Dict) -> CheckResult:
         # 判断盘中/盘后：bars[-1] 有 is_today=True 标记且未收盘 = 盘中
         is_live = bars[-1].get('is_today') is True and now < market_close
         passed_w = _calc_passed_weight(now)
+        
+        # 初始化 estimated_full
+        estimated_full = today_vol_raw  # 默认使用今日量
 
         # 非交易日：now 已退为 16:00，直接用 bars[-1]（最后交易日）数据
         # 仅在 reason 中体现，不加标签

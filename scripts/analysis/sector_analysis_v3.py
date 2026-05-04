@@ -48,7 +48,10 @@ def _standardize_code(num_code: str) -> str:
 DB_PATH = os.path.expanduser("~/.qclaw/skills/iron-sentinel/data/stock_data.db")
 
 # 板块归属数据源优先级（可配置）
-BOARD_SOURCE_PRIORITY = ["em", "sina"]  # 优先EM，回退SINA
+BOARD_SOURCE_PRIORITY = ["em", "sina"]  # 用于 stock_concept 表
+
+# 行业板块数据源优先级（stock_industry_board 表的 source 不同）
+INDUSTRY_BOARD_SOURCE_PRIORITY = ["em_industry", "sina"]
 
 # 成分股计算限制
 MAX_CONSTITUENTS = 15  # 限制成分股数量，避免过慢
@@ -81,6 +84,7 @@ def _get_stock_boards(stock_code: str, max_concepts: int = 8) -> List[Dict]:
     cur = conn.cursor()
 
     # --- 1. 申万行业链 (L1/L2/L3) ---
+    has_sw_industry = False
     cur.execute("""
         SELECT si.level, si.industry_code,
                il1.name as l1_name, il2.name as l2_name, il3.name as l3_name
@@ -91,11 +95,13 @@ def _get_stock_boards(stock_code: str, max_concepts: int = 8) -> List[Dict]:
         WHERE si.stock_code = ?
     """, (stock_code,))
 
-    for row in cur.fetchall():
+    sw_rows = cur.fetchall()
+    for row in sw_rows:
         level = row['level']
         name = row['l1_name'] or row['l2_name'] or row['l3_name'] or ''
         if not name:
             continue
+        has_sw_industry = True
         weight_map = {'L1': 0.90, 'L2': 0.85, 'L3': 0.80}
         boards.append({
             'name': name,
@@ -105,6 +111,36 @@ def _get_stock_boards(stock_code: str, max_concepts: int = 8) -> List[Dict]:
             'board_code': row['industry_code'],
             'stock_count': None,
         })
+
+    # --- 1.5 Fallback: 申万行业缺失时，使用EM行业降级替代 ---
+    # 原因：申万行业覆盖率约97.44%，有145只SZ/SH股票无申万数据
+    # EM行业覆盖率100%，可作为fallback保证行业维度不缺失
+    if not has_sw_industry:
+        ib_sources = INDUSTRY_BOARD_SOURCE_PRIORITY.copy()
+        for src in ib_sources:
+            ib_source = 'em' if src == 'em_industry' else src
+            cur.execute("""
+                SELECT sib.board_code, ib.board_name
+                FROM stock_industry_board sib
+                LEFT JOIN industry_boards ib ON sib.board_code = ib.board_code AND ib.source = ?
+                WHERE sib.stock_code = ? AND sib.source = ?
+            """, (ib_source, stock_code, src))
+            rows = cur.fetchall()
+            if rows:
+                for row in rows:
+                    name = row['board_name'] or ''
+                    if not name:
+                        continue
+                    # Fallback权重：低于申万(0.8-0.9)，但高于EM概念(0.5)
+                    boards.append({
+                        'name': name,
+                        'source_type': 'EM行业(Fallback)',
+                        'level': 'industry',
+                        'weight': 0.55,
+                        'board_code': row['board_code'],
+                        'stock_count': None,
+                    })
+                break
 
     # --- 2. EM概念板块 (按成分股数量排序取Top) ---
     # 策略：优先EM，没有则回退SINA
@@ -149,28 +185,34 @@ def _get_stock_boards(stock_code: str, max_concepts: int = 8) -> List[Dict]:
         })
 
     # --- 3. EM行业板块 ---
-    ib_sources = BOARD_SOURCE_PRIORITY.copy()
-    for src in ib_sources:
-        cur.execute("""
-            SELECT sib.board_code, ib.board_name
-            FROM stock_industry_board sib
-            LEFT JOIN industry_boards ib ON sib.board_code = ib.board_code
-            WHERE sib.stock_code = ? AND sib.source = ?
-        """, (stock_code, src))
-        rows = cur.fetchall()
-        if rows:
-            for row in rows:
-                name = row['board_name'] or ''
-                if not name:
-                    continue
-                boards.append({
-                    'name': name,
-                    'source_type': 'EM行业',
-                    'level': 'industry',
-                    'weight': 0.65,
-                    'board_code': row['board_code'],
-                    'stock_count': None,
-                })
+    # 注意：stock_industry_board 表的 source 是 "em_industry"，而 industry_boards 表的 source 是 "em"
+    # 需要正确映射 source
+    # 如果已经使用了Fallback（申万缺失），则跳过此步骤避免重复
+    if has_sw_industry:
+        ib_sources = INDUSTRY_BOARD_SOURCE_PRIORITY.copy()
+        for src in ib_sources:
+            # 映射 source：em_industry -> em
+            ib_source = 'em' if src == 'em_industry' else src
+            cur.execute("""
+                SELECT sib.board_code, ib.board_name
+                FROM stock_industry_board sib
+                LEFT JOIN industry_boards ib ON sib.board_code = ib.board_code AND ib.source = ?
+                WHERE sib.stock_code = ? AND sib.source = ?
+            """, (ib_source, stock_code, src))
+            rows = cur.fetchall()
+            if rows:
+                for row in rows:
+                    name = row['board_name'] or ''
+                    if not name:
+                        continue
+                    boards.append({
+                        'name': name,
+                        'source_type': 'EM行业',
+                        'level': 'industry',
+                        'weight': 0.65,
+                        'board_code': row['board_code'],
+                        'stock_count': None,
+                    })
             break
 
     conn.close()
@@ -184,15 +226,23 @@ def _get_stock_boards(stock_code: str, max_concepts: int = 8) -> List[Dict]:
 
 def _fetch_from_neodata(board_name: str) -> Optional[Dict]:
     """
-    轨道A: 通过NeoData查询板块指数数据。
+    轨道A: 通过NeoData查询板块数据。
+
+    NeoData返回的是板块成分股数据表，包含成分股的涨跌幅、换手率、量比等。
+    我们从中解析并计算板块级别的指标。
 
     返回: {
-        'chg_pct': float,      # 今日涨跌幅%
-        'chg_5d': float,       # 5日涨幅%
-        'chg_20d': float,      # 20日涨幅%
-        'turnover': float,     # 换手率%
-        'volume_ratio': float, # 量比
-        'amount': float,       # 成交额(万元)
+        'chg_pct': float,       # 成分股平均涨跌幅%
+        'up_ratio': float,      # 上涨占比%
+        'limit_up_count': int,  # 涨停家数
+        'avg_gain_5d': float,   # 近5日涨幅%（注：成分股数据不含5日涨幅）
+        'chg_5d': float,        # 兼容字段，同avg_gain_5d
+        'chg_20d': float,       # 近20日涨幅%（注：成分股数据不含20日涨幅）
+        'turnover': float,      # 平均换手率%
+        'volume_ratio': float, # 平均量比
+        'amount': float,        # 总成交额(万元)
+        'constituent_count': int,  # 成分股数量
+        'constituents': List,  # 成分股详细数据
         'source': 'neodata',
     } 或 None
     """
@@ -209,46 +259,196 @@ def _fetch_from_neodata(board_name: str) -> Optional[Dict]:
         if err or not result:
             return None
 
-        # 尝试多个type_hint
+        # 查找板块成分股数据
         txt = ""
-        for hint in ["板块行情", "板块走势", "板块数据"]:
-            t = nd_extract_text(result, hint)
-            if t and ('涨跌幅' in t or '涨幅' in t):
-                txt = t
+        
+        # v1 路径
+        for item in result.get('recall', []):
+            item_type = item.get('type', '')
+            if '成分股' in item_type:
+                txt = item.get('content', '')
                 break
+        
+        # v2 路径
+        if not txt:
+            api_data = result.get('raw', {}).get('apiData', {})
+            for item in api_data.get('apiRecall', []):
+                item_type = item.get('type', '')
+                if '成分股' in item_type:
+                    txt = item.get('content', '')
+                    break
 
         if not txt:
             return None
 
-        def _extract(pat: str, text: str) -> Optional[float]:
-            m = re.search(pat, text)
-            if m:
-                try:
-                    return float(m.group(1).replace(',', ''))
-                except (ValueError, IndexError):
-                    pass
+        # 解析成分股表格数据
+        constituents = _parse_constituent_table(txt)
+        if not constituents:
             return None
+
+        # 计算板块级别指标
+        chg_pcts = [c['chg_pct'] for c in constituents]
+        up_count = sum(1 for c in chg_pcts if c > 0)
+        limit_up_count = sum(1 for c in chg_pcts if c >= 9.9)
+        
+        # 换手率和量比（可能有空值）
+        turnovers = [c['turnover'] for c in constituents if c.get('turnover') is not None]
+        volume_ratios = [c['volume_ratio'] for c in constituents if c.get('volume_ratio') is not None]
+        
+        # 成交额（万元）
+        total_amount = sum(c['amount'] for c in constituents if c.get('amount'))
 
         data = {
-            'chg_pct': _extract(r'涨跌幅[:：]?\s*([-\d.]+)', txt),
-            'chg_5d': _extract(r'5日涨幅[:：]?\s*([-\d.]+)', txt),
-            'chg_20d': _extract(r'20日涨幅[:：]?\s*([-\d.]+)', txt),
-            'turnover': _extract(r'换手率[:：]?\s*([-\d.]+)', txt),
-            'volume_ratio': _extract(r'量比[:：]?\s*([-\d.]+)', txt),
-            'amount': _extract(r'成交额[:：]?\s*([-\d,.]+)', txt),
+            'chg_pct': sum(chg_pcts) / len(chg_pcts) if chg_pcts else 0,
+            'up_ratio': (up_count / len(constituents) * 100) if constituents else 0,
+            'limit_up_count': limit_up_count,
+            'avg_gain_5d': None,  # 成分股数据不含5日涨幅
+            'chg_5d': None,
+            'chg_20d': None,
+            'turnover': sum(turnovers) / len(turnovers) if turnovers else None,
+            'volume_ratio': sum(volume_ratios) / len(volume_ratios) if volume_ratios else None,
+            'amount': total_amount,
+            'constituent_count': len(constituents),
+            'constituents': constituents,
             'source': 'neodata',
         }
-
-        # 过滤掉None值过多的结果
-        valid_count = sum(1 for v in data.values() if v is not None and v != 'neodata')
-        if valid_count < 2:
-            return None
 
         _ND_BOARD_CACHE[cache_key] = (data, now)
         return data.copy()
 
     except Exception:
         return None
+
+
+def _parse_constituent_table(txt: str) -> List[Dict]:
+    """
+    解析NeoData返回的成分股表格数据。
+    
+    表格格式：
+    | 股票代码 | 股票名称 | 价格 | 涨跌幅 | 总市值 | 主力资金净流入（万元） | ... |
+    | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+    | 300843.SZ | 胜蓝股份 | 82.34 | 12.78 | 134.8 | -47138400 | ... |
+    
+    返回: [{stock_code, stock_name, chg_pct, mkt_cap, turnover, volume_ratio, amount}, ...]
+    """
+    constituents = []
+    
+    # 分割表格行
+    lines = txt.split('\n')
+    
+    # 找到表头行（包含"涨跌幅"字段）
+    header_idx = -1
+    for i, line in enumerate(lines):
+        if '涨跌幅' in line and '|' in line:
+            header_idx = i
+            break
+    
+    if header_idx < 0:
+        return []
+    
+    # 解析表头，确定各列位置
+    header_line = lines[header_idx]
+    col_indices = {}
+    
+    # 常见列名映射
+    col_patterns = {
+        'stock_code': ['股票代码', '代码'],
+        'stock_name': ['股票名称', '名称'],
+        'price': ['价格', '最新价'],
+        'chg_pct': ['涨跌幅'],
+        'mkt_cap': ['总市值'],
+        'amount': ['成交额'],
+        'turnover': ['换手率'],
+        'volume_ratio': ['量比'],
+    }
+    
+    # 简化处理：按顺序解析数值行
+    # 跳过表头和分隔符行
+    data_lines = []
+    in_table = False
+    for line in lines:
+        if header_idx >= 0 and '---' in line:
+            in_table = True
+            continue
+        if in_table and '|' in line and not line.strip().startswith('| :---'):
+            data_lines.append(line)
+    
+    for line in data_lines:
+        parts = [p.strip() for p in line.split('|')]
+        # 过滤空part
+        parts = [p for p in parts if p]
+        
+        if len(parts) < 4:
+            continue
+        
+        # 尝试解析
+        try:
+            # parts[0]=股票代码, parts[1]=股票名称, parts[2]=价格, parts[3]=涨跌幅
+            stock_code = parts[0]
+            stock_name = parts[1] if len(parts) > 1 else ''
+            
+            # 涨跌幅：提取数字
+            chg_pct_str = parts[3] if len(parts) > 3 else '0'
+            chg_pct = float(chg_pct_str.replace('%', '').replace('+', '').strip())
+            
+            # 市值（亿元）
+            mkt_cap = 0.0
+            if len(parts) > 4:
+                try:
+                    mkt_cap = float(parts[4].replace(',', '').strip())
+                except (ValueError, IndexError):
+                    pass
+            
+            # 成交额（万元）
+            amount = 0.0
+            for idx in range(5, min(len(parts), 15)):
+                try:
+                    val = float(parts[idx].replace(',', '').strip())
+                    if val > 10000:  # 成交额通常较大
+                        amount = val
+                        break
+                except (ValueError, IndexError):
+                    continue
+            
+            # 换手率
+            turnover = None
+            for idx in range(5, min(len(parts), 15)):
+                val_str = parts[idx].replace('%', '').strip()
+                try:
+                    val = float(val_str)
+                    if 0 <= val <= 100:  # 换手率合理范围
+                        turnover = val
+                        break
+                except (ValueError, IndexError):
+                    continue
+            
+            # 量比
+            volume_ratio = None
+            for idx in range(5, min(len(parts), 15)):
+                try:
+                    val = float(parts[idx].replace(',', '').strip())
+                    if 0 <= val <= 50:  # 量比合理范围
+                        volume_ratio = val
+                        break
+                except (ValueError, IndexError):
+                    continue
+            
+            if stock_code and (stock_code.endswith('.SZ') or stock_code.endswith('.SH')):
+                constituents.append({
+                    'stock_code': stock_code.replace('.SZ', '').replace('.SH', ''),
+                    'stock_name': stock_name,
+                    'chg_pct': chg_pct,
+                    'mkt_cap': mkt_cap,
+                    'turnover': turnover,
+                    'volume_ratio': volume_ratio,
+                    'amount': amount,
+                    'gain_5d': 0.0,  # NeoData成分股数据不含5日涨幅，用0占位
+                    'gain_20d': 0.0,
+                })
+        except (ValueError, IndexError) as e:
+            continue
+    
+    return constituents
 
 
 # ==================== P3: 轨道B - 成分股实时计算 ====================
