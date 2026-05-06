@@ -31,7 +31,7 @@ from data_source import (
     get_realtime_tencent, get_realtime_neodata, get_daily_bars_tencent,
     get_daily_bars_sina,  # 新浪备用日K线（腾讯API今日被屏蔽）
     get_index_tencent, get_index_bars_tencent,
-    get_money_flow_akshare, get_financial_akshare,
+    get_money_flow_akshare, get_financial_akshare, get_financial_pytdx,
     get_industry_info_neodata, get_sector_index_akshare,
     get_board_leaders_fixed, get_realtime_akshare, get_daily_bars_akshare,
     _normalize_code, _market_code, _to_float, clear_cache,
@@ -357,6 +357,15 @@ class IronSentinelEngine:
                         src = "neodata"
         except Exception:
             pass
+
+        # pytdx 通达信（NeoData失败时尝试）
+        if not fin:
+            try:
+                quote = self._raw.get('quote', {})
+                price = quote.get('price', 0) if quote else 0
+                fin, src, _ = get_financial_pytdx(self.stock_code, price=price)
+            except Exception:
+                pass
 
         # akshare 降级
         if not fin:

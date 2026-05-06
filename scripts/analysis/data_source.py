@@ -427,6 +427,88 @@ def get_financial_akshare(code: str) -> Tuple[Optional[Dict], str, str]:
         return None, "akshare", str(e)
 
 
+def get_financial_pytdx(code: str, price: float = 0.0) -> Tuple[Optional[Dict], str, str]:
+    """通达信财务数据（通过pytdx获取）"""
+    try:
+        from pytdx.hq import TdxHq_API
+
+        # 标准化代码
+        std_code = _normalize_code(code)
+        num = std_code[2:]
+        # 市场：0=深圳, 1=上海
+        market = 1 if std_code.startswith('sh') else 0
+
+        # 通达信服务器列表
+        servers = [
+            ('115.238.56.198', 7709),
+            ('218.75.126.150', 7709),
+            ('119.147.212.81', 7709),
+            ('124.160.88.183', 7709),
+        ]
+
+        api = TdxHq_API()
+        fin = None
+        for host, port in servers:
+            try:
+                if api.connect(host, port, time_out=3):
+                    result = api.get_finance_info(market, num)
+                    api.disconnect()
+                    if result and result.get('zongguben'):
+                        fin = result
+                        break
+            except Exception:
+                continue
+
+        if not fin:
+            return None, "pytdx", "通达信无财务数据"
+
+        # 提取原始数据
+        zongguben = float(fin.get('zongguben', 0))      # 总股本
+        jingzichan = float(fin.get('jingzichan', 0))    # 净资产
+        jinglirun = float(fin.get('jinglirun', 0))      # 净利润
+        mgjzc = float(fin.get('meigujingzichan', 0))    # 每股净资产
+        updated_date = int(fin.get('updated_date', 0))  # 财报更新日期
+
+        # 计算 PB
+        pb = (price / mgjzc) if price > 0 and mgjzc > 0 else 0.0
+
+        # 计算 ROE
+        roe = (jinglirun / jingzichan * 100) if jingzichan > 0 else 0.0
+
+        # 计算 PE（根据财报日期做年化处理）
+        pe = 0.0
+        if price > 0 and zongguben > 0 and jinglirun > 0:
+            total_mv = price * zongguben
+            # 根据财报发布月份推断净利润周期
+            month = (updated_date // 100) % 100 if updated_date else 0
+            if month in [3, 4]:          # 年报（全年数据）
+                annual_profit = jinglirun
+            elif month in [5, 6]:        # 一季报（1-3月）
+                annual_profit = jinglirun * 4
+            elif month in [7, 8]:        # 中报（1-6月）
+                annual_profit = jinglirun * 2
+            elif month in [9, 10, 11]:   # 三季报（1-9月）
+                annual_profit = jinglirun * 4 / 3
+            else:                        # 默认不调整
+                annual_profit = jinglirun
+            pe = total_mv / annual_profit if annual_profit > 0 else 0.0
+
+        return {
+            'pe': pe,
+            'pb': pb,
+            'roe': roe,
+            'revenue': float(fin.get('zhuyingshouru', 0)),
+            'profit': jinglirun,
+            'total_assets': float(fin.get('zongzichan', 0)),
+            'net_assets': jingzichan,
+            'updated_date': str(updated_date),
+            'source_detail': 'pytdx',
+        }, "pytdx", ""
+
+    except Exception as e:
+        return None, "pytdx", str(e)
+
+
 # ==================== 行业板块数据 ====================
 
 def get_industry_info_neodata(code: str) -> Tuple[Optional[Dict], str, str]:
